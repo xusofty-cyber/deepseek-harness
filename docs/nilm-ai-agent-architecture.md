@@ -73,35 +73,45 @@
 
 ## 3. 总体系统架构设计
 
-系统划分为四个核心层次：
+系统设计为**“被动问答（Pull）+ 主动预警推送（Push）”双轮驱动**的闭环架构：
 
 ```mermaid
 flowchart TB
-    subgraph ClientLayer["1. 终端接入层"]
-        WeChat["微信小程序 (文本输入 / 语音长按录入)"]
+    subgraph ClientLayer["1. 终端与通知触达层"]
+        WeChat["微信小程序 (文本输入 / 语音提问 / 图表查看)"]
         MobileApp["移动端 App (iOS / Android)"]
+        WxPush["微信服务号/小程序模板消息 (主动告警卡片)"]
+        WorkWechat["企业微信群机器人 / 运维短信 SMS"]
     end
 
-    subgraph GatewayLayer["2. 业务接入与 BFF 层"]
+    subgraph GatewayLayer["2. 业务接入与通知网关 (BFF & Push Gateway)"]
         WxAuth["微信鉴权 (code2Session -> OpenID -> 工厂租户解析)"]
         ASRSvc["语音识别 ASR (微信同声传译 / Whisper 流式转文本)"]
-        SSEBridge["SSE / WebSocket 双向流式打字机桥接"]
+        SSEBridge["SSE / WebSocket 双向流式打字机桥接 (被动问答)"]
+        PushSvc["主动通知推送服务 (模板消息 / 短信 / Webhook)"]
     end
 
     subgraph DSHLayer["3. DeepSeek Harness (dsh) 核心引擎 (Profile: dsh-nilm-service)"]
         subgraph CorePlatform["Harness 底座与扩展"]
             AgentLoop["Agent Loop (DeepSeek-V3 / R1)"]
             SessionManager["Session / Context 持久化"]
-            SchedulePlugin["Schedule / Job 主动巡检"]
+            SchedulePlugin["Schedule / Job 定时调度与夜间守护"]
+        end
+
+        subgraph SentinelModule["主动巡检与预警研判引擎"]
+            OffHoursSentinel["非工作时间基载守护器\n(巡检夜间偷漏电/空压机未关)"]
+            SafetyAlarmSentinel["电气安全越限监听器\n(实时捕获过载/三相不平衡/违规充电)"]
+            PenaltySentinel["力调电费考核预测器\n(月度功率因数趋势预警)"]
         end
 
         subgraph NILMSeams["NILM 业务 Seams"]
             DBSeam["ctx.nilmDatabase (MySQL 连接池 & 资产模型)"]
             TSSeam["ctx.nilmTimeseries (TDengine 时序聚合与冷热路由)"]
+            NotifySeam["ctx.notification (主动通知调度器)"]
         end
 
         subgraph ToolMatrix["NILM 领域 Tool 矩阵 (defineTool)"]
-            T1["tool_query_energy_stats\n(总能耗/峰平谷分布/电费计算)"]
+            T1["tool_query_energy_stats\n(总能耗/车间多终端聚合/电费)"]
             T2["tool_query_nilm_equipment\n(NILM设备分解/工况/开机时长)"]
             T3["tool_query_power_quality\n(功率因数/各次谐波THD/电压暂降)"]
             T4["tool_query_safety_alarms\n(电气隐患/过载/三相不平衡)"]
@@ -111,7 +121,7 @@ flowchart TB
 
     subgraph DataLayer["4. 数据存储基础设施"]
         subgraph CloudAliyun["阿里云 VPC / K8s 环境"]
-            MySQLRouter["MySQL Router (30446 / 6446)\n[企业档案、设备表、用户权限、安全告警]"]
+            MySQLRouter["MySQL Router (30446 / 6446)\n[企业档案、设备表、用户权限、安全告警、推送日志]"]
             TDengineCloud["TDengine 集群 (20630 / taosws)\n[近 90 天热时序点位]"]
         end
 
@@ -121,10 +131,21 @@ flowchart TB
         end
     end
 
-    ClientLayer --> GatewayLayer
-    GatewayLayer -->|dsh SDK JSON-RPC / WebSocket| DSHLayer
+    %% 交互数据流
+    WeChat -->|问答请求| GatewayLayer
+    GatewayLayer -->|dsh SDK JSON-RPC| DSHLayer
     AgentLoop --> ToolMatrix
     ToolMatrix --> NILMSeams
+
+    %% 主动巡检链路
+    SchedulePlugin --> SentinelModule
+    SentinelModule -->|触发分析| AgentLoop
+    SentinelModule -->|生成告警报告| NotifySeam
+    NotifySeam -->|调用推送| PushSvc
+    PushSvc --> WxPush
+    PushSvc --> WorkWechat
+
+    %% 数据库交互
     DBSeam --> MySQLRouter
     TSSeam -->|时段 <= 90天| TDengineCloud
     TSSeam -->|时段 > 90天| TDengineCold
@@ -332,6 +353,37 @@ export const querySafetyAlarmsTool = defineTool({
    - Step 3: 调用 tool_query_nilm_equipment 排查非生产班次（如深夜）是否有空压机、空调等设备空载长开；
    - 输出明确的节能操作建议与图表数据。
 ```
+
+---
+
+### 4.4 主动巡检守护与自动告警实现机制（基于 dsh-schedule）
+
+传统系统仅支持“问答式”被动响应，本架构利用 dsh 的后台调度与自主会话能力，实现主动预警推送：
+
+```text
+  [ dsh-schedule 定时调度器 / nilm_unsafe_record 变更触发 ]
+                          │
+                          ▼
+            [ 巡检研判守护进程 (Sentinel) ]
+             - 规则 1: 夜间基载偏离度检测 (非工作时间总负荷 > 阈值)
+             - 规则 2: NILM 细分负荷异常 (空压机/空调未关长开)
+             - 规则 3: 电气安全越限 (单设备过载 / 三相不平衡 / 漏电)
+                          │ (检测到异常事件)
+                          ▼
+             [ 自动调起 Agent 研判会话 (Autonomous Turn) ]
+             - 注入异常事实 -> 模型分析原因 -> 核算浪费电费 -> 生成改善建议
+                          │
+                          ▼
+             [ 主动推送网关 (Notification Gateway) ]
+             ├── 微信小程序订阅消息 / 服务号模板消息 (手机即时提醒)
+             ├── 企业微信群机器人 Webhook (配电运维群)
+             └── 紧急高危告警触发短信 SMS 外呼
+```
+
+1. **非工作时间基载巡检器**：在工作日 22:00~06:00 及节假日，每 30 分钟轮询车间秒级功率。一旦发现负荷基线抬升超过 20%，立即调取 `tool_query_nilm_equipment` 定位是哪台设备启动，测算出空载浪费电量；
+2. **安全越限事件监听器**：高频监听 MySQL `nilm_unsafe_record` 新增记录，若出现 `unsafe_type = 1`（过载）或 `unsafe_type = 4`（违规用电），在 30 秒内向绑定该工厂的电工微信推送告警卡片；
+3. **力调电费预测推送**：每月 20 日和 25 日自动聚合当月已发生的平均功率因数，若预测将低于 0.90，主动向厂长与能源主管发出预警通知，指导及时投切电容器组；
+4. **推送审计与去重**：每次推送在 MySQL `log_notification_record` 表中落盘，并应用 30 分钟告警防刷抑制，避免同一故障反复骚扰用户。
 
 ---
 
