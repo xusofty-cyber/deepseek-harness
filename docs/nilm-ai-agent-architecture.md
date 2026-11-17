@@ -8,11 +8,43 @@
 
 ---
 
-## 2. 现场数据底座与网络拓扑调研
+## 2. 现场数据底座与拓扑模型
 
-通过实地探测与自动化数据挖掘，底层业务与时序数据资产全貌如下：
+### 2.1 工厂多级空间与多终端拓扑
+现场设备与空间呈现典型的工业树状拓扑：
+- 一家工厂或企业（`sys_tenant_info`）拥有多个车间、厂房或楼宇（`building/floor/house_basic_info`）；
+- 一个车间/厂房内部，通常根据变压器低压出线、进线总柜或配电干线的划分，安装**多台非侵入式监测终端**（`nilmd_basic_info`）；
+- 每台终端支持扩展**多个采集通道**（`nilmd_channel_basic_info`，覆盖不同的相别与支路）；
+- 每个通道通过 NILM 算法分解出该支路下的**细分用电设备**（`nilmdc_appliance_identification`）。
 
-### 2.1 业务元数据与关系库（MySQL: `tpim_system`）
+```text
+┌────────────────────────────────────────────────────────┐
+│ 企业 / 工厂 (Tenant, 租户级别隔离)                     │
+└──────────────────────────┬─────────────────────────────┘
+                           │ 1:N
+┌──────────────────────────▼─────────────────────────────┐
+│ 车间 / 厂房 / 楼宇 (Workshop / Building)               │
+└──────────────────────────┬─────────────────────────────┘
+                           │ 1:N (一个车间装有多台终端)
+┌──────────────────────────▼─────────────────────────────┐
+│ NILM 监测终端 (Terminal / MW-A900 主机)                │
+└──────────────────────────┬─────────────────────────────┘
+                           │ 1:N (每台终端多通道)
+┌──────────────────────────▼─────────────────────────────┐
+│ 监测通道 (Channel / device_id 如 0281..._1, ..._2)      │
+└──────────────────────────┬─────────────────────────────┘
+                           │ 1:N (NILM 算法分解结果)
+┌──────────────────────────▼─────────────────────────────┐
+│ 细分用电设备 (Appliance, 如 空压机、注塑机、空调)      │
+└────────────────────────────────────────────────────────┘
+```
+
+这种拓扑结构决定了系统计算规则：
+- **全厂级能耗**：遍历全厂所有车间、所有终端通道的电能并汇总求和；
+- **车间级能耗**：检索该车间下挂载的所有 NILM 终端，批量聚合求和（`WHERE device_id IN (...)`）；
+- **设备级能耗**：定位具体终端通道下的算法分解点位。
+
+### 2.2 业务元数据与关系库（MySQL: `tpim_system`）
 - **连接通道**：K8s 集群内路由 `mysql.mysql.svc.cluster.local:6446`（读写），公网节点映射 `121.41.8.7:30446`。
 - **核心数据表**：
   - `sys_tenant_info`：企业租户信息表（包含 11 家企业租户，如 `tenant_id: TN20230816...`，企业名称、地址、电话）。
@@ -154,10 +186,18 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 
 export const queryEnergyStatsTool = defineTool({
   name: 'tool_query_energy_stats',
-  description: '查询工厂指定车间/监测点在指定时间范围内的总用电量(kWh)、日用能趋势及电量统计',
+  description: '查询工厂、车间或单台终端在指定时间范围内的总用电量(kWh)、日用能趋势及电量统计。支持车间多终端自动聚合汇总。',
   parameters: {
     tenantId: { type: 'string', required: true, description: '企业租户ID' },
-    assetPath: { type: 'string', description: '监测点或车间路径，如 根节点/临平校区/LG-18号楼/二层/201' },
+    scope: {
+      type: 'string',
+      required: true,
+      description: '统计聚合层级: factory(全厂), workshop(车间多终端聚合), terminal(单台终端), channel(单通道)'
+    },
+    targetNameOrPath: {
+      type: 'string',
+      description: '车间名称或物理路径，如 二号车间、LG-18号楼/二层，scope为factory时可空'
+    },
     startTime: { type: 'string', required: true, description: '起始时间，格式 YYYY-MM-DD HH:mm:ss' },
     endTime: { type: 'string', required: true, description: '截止时间，格式 YYYY-MM-DD HH:mm:ss' }
   },
@@ -166,6 +206,7 @@ export const queryEnergyStatsTool = defineTool({
       type: 'object',
       properties: {
         totalKWh: { type: 'number' },
+        deviceCount: { type: 'number', description: '参与聚合计算的终端/通道数量' },
         trendData: { type: 'array' }, // [{ date: string, kwh: number }]
         summaryText: { type: 'string' }
       }
@@ -174,7 +215,10 @@ export const queryEnergyStatsTool = defineTool({
   },
   async execute(args, exec) {
     if (exec.signal.aborted) throw new Error('Query aborted')
-    // 优先查 TDengine 预聚合超表 consum_energy_day_statistics_info
+    // 执行逻辑：
+    // 1. 若 scope 为 'workshop'，先查 MySQL 该车间绑定的所有终端通道 ID 集合 [id1, id2, ...]
+    // 2. 构造 TDengine SQL: SELECT SUM(energy_diff) FROM ... WHERE device_id IN (id1, id2, ...)
+    // 3. 返回多设备聚合总电量与各自分布
     return await exec.agent.ctx.nilmTimeseries.queryEnergy(args)
   }
 })
