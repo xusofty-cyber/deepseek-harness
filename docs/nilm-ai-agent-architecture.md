@@ -21,6 +21,7 @@
 | AD-09 图表由后端确定性生成 | Tool 结果携带受控 `ChartSpec`，经 `presentationMeta` 交给调用方客户端；不让模型手写 ECharts option | 降低 token 消耗与图表幻觉，调用方可统一主题与降级 |
 | AD-10 通知采用 Outbox | 告警事件与通知任务落库，投递器至少一次重试并幂等去重 | 微信、短信、Webhook 都可能失败，必须有可审计的补偿链路 |
 | AD-11 独立项目与参考边界 | 本项目只提供后端 Agent 服务；调用方（微信小程序/App 平台）负责登录、用户、权限与前端；本项目自建领域模型、租户配置、会话、审计与数据访问层，不复用参考系统的框架、业务 API、JWT claims 或网关 | 避免把服务做成参考系统的插件，也避免把账号体系与前端纳入本项目范围 |
+| AD-12 时序特征工程与算法协同 | 秒级数据先由领域服务提取紧凑事件特征向量（突变台阶、稳态功率、冲击比、谐波指纹），再由 Agent（配合特征库）进行电器逆向反推与隐患因果分析 | 避免数万个原始秒级点位塞爆上下文窗口引发幻觉，同时赋予 Agent 强大的在线时序算法诊断能力 |
 
 参考系统不是本项目的运行时依赖。它们的页面、接口与表结构只用来校准“需要什么能力、数据大致长什么样”；本项目的架构、部署与代码边界独立设计。数据接入通过版本化适配器隔离，详见第 3 章。
 
@@ -33,6 +34,7 @@
 **本期包含**：
 
 - 文本问答：能耗、电费、峰平谷、同比环比、设备工况、空载浪费、电能质量、安全隐患。
+- 在线时序分析：支持对指定短窗口内的秒级电流/功率数据提取事件特征，反推可能运行的电器设备，并深度研判微观用电隐患。
 - 语音问答：ASR 由调用方或微信能力完成，Agent 只接收文本。
 - 结果呈现：流式 Markdown、结构化图表卡片、告警卡片、澄清与操作卡片。
 - 主动巡检：非工作时段异常用能、电气安全越限、力调电费风险、每日晨报。
@@ -83,9 +85,11 @@
 | FR-2.1 设备工况 | `nilm-timeseries` 设备状态查询 | 启停去抖、状态翻转、断点用例 |
 | FR-2.2 运行/空载时长 | `nilm-analytics` 时长计算 | 跨天、跨停机、采样缺失用例 |
 | FR-2.3 空载浪费 | `nilm-analytics` 浪费估算 | 阈值配置、非工作时段、金额换算测试 |
+| FR-2.4 秒级时序反推电器 | `nilm-analytics`（特征提取）+ Agent（因果拟合） | 边沿突变识别、特征库匹配、多电器候选用例 |
 | FR-3.1 隐患检索 | `nilm-safety` 查询服务 | 类型/时间/点位过滤测试 |
 | FR-3.2 隐患细节 | `nilm-safety` 结果投影 | 字段完整性、点位解析测试 |
 | FR-3.3 成因诊断 | Agent + 规则提示词 | 黄金问答集中的诊断类用例 |
+| FR-3.4 微观潜在隐患研判 | `nilm-analytics` + Agent 推理模型 | 突态冲击比、谐波突跃、高频启停因果用例 |
 | FR-4.1 功率因数与罚款 | `nilm-analytics` + `nilm-tariff` | 能量加权 PF、阈值、风险分级测试 |
 | FR-4.2 谐波监测 | `nilm-analytics` 电能质量 | 2~7 次含有率计算与单位测试 |
 | FR-4.3 能效建议 | Agent + 专家提示词 | 建议必须引用已查出的数据 |
@@ -367,6 +371,7 @@ interface NilmDataQuality {
 | 设备与空载 | `nilm_appliance_query` | 设备状态/识别数据适配 + 时长与浪费计算 |
 | 电能质量 | `nilm_power_quality_query` | 实时测量适配 + 能量加权 PF、谐波含有率 |
 | 安全隐患 | `nilm_safety_query` | 隐患数据适配 + 点位解析 + 分级 |
+| 在线时序分析与隐患研判 | `nilm_timeseries_analyze` | `nilm-analytics`（秒级边沿特征提取）+ Agent（特征库反推与因果诊断） |
 | 需量 | 可由 `nilm_energy_query` 的 `metric=demand` 承载 | 需量政策与统计表；不强制新增 Tool |
 | 实时监控 | 可并入 `nilm_appliance_query` 或后续 Tool | 短窗口查询；点数与并发受限 |
 | 总览摘要 | 可并入 `nilm_energy_query` 或后续 Tool | 聚合数字由本项目重算 |
@@ -900,6 +905,7 @@ Tool 是模型与领域服务之间唯一的业务入口。原则：
 | `nilm_appliance_query` | 设备启停、运行时长、空载、浪费 | `scope`、`timeRange`、`applianceCategory?`、`idleThreshold?` | 设备列表、时长、估算电量/金额、残差、质量 |
 | `nilm_power_quality_query` | 功率因数、谐波、电压偏差、三相不平衡 | `scope`、`timeRange`、`metrics?` | 能量加权 PF、极值、谐波含有率、风险、`ChartSpec` |
 | `nilm_safety_query` | 隐患检索与详情 | `scope`、`timeRange`、`types?`、`severity?` | 事件列表、点位、越限值、处置建议所需事实 |
+| `nilm_timeseries_analyze` | 秒级时序算法特征分析、电器反推与潜在微观隐患研判 | `scope`、`timeRange`（短窗口<=4h）、`metrics?`、`analysisMode` | 突变事件特征集、推断电器候选（功率/谐波拟合）、微观异常波动、`ChartSpec` |
 | `nilm_scope_resolve` | 名称/路径解析与歧义澄清 | `query`、`level?` | 候选 Scope、匹配理由、歧义标记 |
 
 `nilm_scope_resolve` 可以内部调用，也可以在名称模糊时显式返回候选。不要让模型自己拼设备名或猜 ID。
@@ -970,6 +976,67 @@ export const nilmEnergyQueryTool = defineTool({
       timeRange: args.timeRange,
       compare: args.compare,
       includeCost: args.includeCost,
+    })
+  },
+})
+
+export const nilmTimeseriesAnalyzeTool = defineTool({
+  name: 'nilm_timeseries_analyze',
+  description: '对指定终端/通道在短时间窗口（<=4小时）内的秒级时序数据提取边沿突变与暂态特征，反推运行电器候选并研判潜在微观用电隐患。',
+  parameters: {
+    scope: {
+      type: 'object',
+      required: true,
+      additionalProperties: false,
+      properties: {
+        level: { type: 'string', required: true, enum: ['terminal', 'channel'] },
+        id: { type: 'string' },
+        name: { type: 'string' },
+      },
+    },
+    timeRange: {
+      type: 'object',
+      required: true,
+      additionalProperties: false,
+      properties: {
+        start: { type: 'string', required: true },
+        end: { type: 'string', required: true },
+      },
+    },
+    analysisMode: {
+      type: 'string',
+      required: true,
+      enum: ['disaggregation_only', 'hazard_diagnosis', 'comprehensive'],
+    },
+  },
+  output: {
+    schema: {
+      type: 'object',
+      required: true,
+      additionalProperties: false,
+      properties: {
+        summaryText: { type: 'string', required: true },
+        detectedEvents: { type: 'array' },
+        applianceCandidates: { type: 'array' },
+        potentialHazards: { type: 'array' },
+        chart: { type: 'object' },
+        dataQuality: { type: 'object', required: true },
+        warnings: { type: 'array' },
+      },
+    },
+    render: (_args, value) => [{ type: 'text', text: value.summaryText }],
+    presentationMeta: (_args, value) => ({ chart: value.chart, dataQuality: value.dataQuality }),
+  },
+  isConcurrencySafe: () => true,
+  async execute(args, exec) {
+    const agentId = exec.agent?.id
+    if (!agentId) throw new NilmToolError('TENANT_CONTEXT_UNAVAILABLE')
+    const callContext = ctx.nilmContext.require(agentId)
+    return ctx.nilmAnalytics.analyzeTimeseries({
+      callContext,
+      scope: args.scope,
+      timeRange: args.timeRange,
+      analysisMode: args.analysisMode,
     })
   },
 })
@@ -1269,6 +1336,34 @@ interface NilmToolResult<T> {
 ```
 
 `summaryText` 由服务端确定性生成，不交给模型润色；模型可以基于 `facts` 写更自然的解释，但不能改数字与单位。
+
+### 6.8 秒级时序特征工程与算法协同推理流水线
+
+面对用户“分析某时段内秒级电流/功率数据，反推使用了哪些电器，或诊断是否存在用电隐患”的需求，系统必须协同处理海量原始时序与高层机理推断：
+
+1. **痛点与架构分工（AD-12）**：
+   - 1 秒采样率下，单通道 1 小时即产生 3,600 个点，三相电流、电压、有功、无功、功率因数、2~7 次谐波数据累计超 40,000 个浮点数。若将密集矩阵直接灌入 LLM，不仅塞爆上下文、产生数分钟高额延迟与巨大 Token 消耗，且极易引发计算幻觉；
+   - 解决方案：**重度数值计算与边沿特征工程下沉至 `nilm-analytics` 确定性算法引擎；高维模式匹配、机理特征库对齐、因果诊断与自然语言表达由 Agent 承担**。
+
+2. **阶段一：秒级时序特征提取（`nilm-analytics` 纯函数算法引擎）**：
+   - **边沿突变检测（Edge Step Detection）**：通过双边滑动窗均值滤波与 CUSUM（累积和）算法，滤除工业现场固有白噪声（如 $\Delta P < 0.2\,\text{kW}$），精准捕获负荷启停或工况跳变瞬间 $t_k$；
+   - **事件特征向量提取（Feature Vectorization）**：对每个检测到的突变边沿，提取以下紧凑特征：
+     - **稳态台阶**：有功阶跃 $\Delta P$ (kW)、无功阶跃 $\Delta Q$ (kvar)、稳态持续时长 $\Delta t$；
+     - **暂态冲击**：启动电流峰值与稳态电流之比（冲击比 $I_{\text{peak}} / I_{\text{steady}}$，例如异步电动机直启为 5~8 倍、变频软启为 1.5~2.5 倍、纯阻加热器为 1.0~1.1 倍）；
+     - **相别与平衡度**：单相投入（如 220V 单相焊机/电炉）还是三相平衡投入（三相电机/压缩机）；
+     - **谐波指纹**：奇次谐波电流增量（$\Delta I_3, \Delta I_5, \Delta I_7$）及总谐波畸变率变化 $\Delta \text{THD-I}$（区分晶闸管调压/整流/变频驱动与线性负载）。
+   - **数据降维压缩**：将数万个时序点位压缩为不超过 20 个紧凑事件元组（JSON 体积 < 4 KB），经由 `nilm_timeseries_analyze` 交付给 Agent。
+
+3. **阶段二：Agent 知识协同推理与隐患研判（`nilm_timeseries_analyze`）**：
+   - **电器逆向反推（Appliance Disaggregation Inference）**：
+     - Agent 将事件特征向量与该车间/行业预置的负荷先验特征库（MySQL `appliance_category` 与工业负荷图谱）进行模糊匹配；
+     - 根据“启停成对因果对称性”（如 10:14 突增 15 kW，10:45 突降 15 kW），推断设备完整工作循环，输出电器类型候选、额定容量预估与置信度；
+   - **微观用电隐患诊断（Microscopic Hazard Diagnosis）**：
+     - **高频启停冲击隐患**：短时间内同一负荷反复启停（如 10 分钟内启停 > 5 次），推断温控失灵、气压开关触点粘连或水泵频繁打压，提示绕组过热与触点烧蚀风险；
+     - **重载憋死/启动迟滞隐患**：冲击电流持续时间异常（如 > 8 秒未降至稳态），推断机械卡阻、皮带过紧或带压启动，提示过载跳闸与电机绝缘老化风险；
+     - **动态三相严重不平衡**：突变事件后三相电流不平衡度跃升至 > 15%，推断局部单相大负荷接入或缺相运行，提示中性线过热与变压器偏载隐患；
+     - **谐波突变与谐振隐患**：负荷投入后伴随 5/7 次谐波骤增与功率因数剧烈晃动，推断无功补偿电容支路谐振或滤波器损坏。
+   - **呈现协同**：`nilm_timeseries_analyze` 工具在返回结构化事实与文本结论的同时，将秒级波形叠加台阶标注的完整时序图放入 `presentationMeta.chart`（`ChartSpec`），由客户端通过 ECharts 原生渲染，不在提示词内塞入海量坐标点。
 
 ## 7. 输出与客户端协议
 
