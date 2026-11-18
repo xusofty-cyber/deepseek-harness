@@ -790,9 +790,9 @@ Tool 是模型与业务数据之间的唯一入口。Tool 参数不包含 `tenan
 | `nilm_scope_resolve` | 名称/路径解析与歧义澄清 | `level`、`id?`、`name?`、`path?` | `ctx.nilmAssets.resolveScope` | 至多 5 个候选、互不重叠计量点、歧义标记 |
 | `nilm_energy_query` | 电量、电费、峰平谷、趋势、同比环比 | `scope`、`start`、`end`、`granularity`、`compare?`、`include_cost?` | `ctx.nilmAssets` + `ctx.nilmTimeseries` + `ctx.nilmTariff` + `ctx.nilmAnalytics` | 总量、分时电量、费用、趋势、质量、`ChartSpec` |
 | `nilm_appliance_query` | 设备启停、运行/停止时长、估算电量与残差 | `scope`、`start`、`end`、`applianceCategory?` | `ctx.nilmTimeseries.queryApplianceStates` + `ctx.nilmAnalytics.summarizeApplianceStates` | 设备列表、时长、估算电量/金额、残差、质量 |
-| `nilm_power_quality_query` | 功率因数、2~7 次谐波、电压偏差、三相不平衡 | `scope`、`timeRange`、`metrics?` | `ctx.nilmAnalytics.queryPowerQuality` | 能量加权 PF、极值、谐波含有率、风险、`ChartSpec` |
+| `nilm_power_quality_query` | 功率因数、2~7 次谐波、电压偏差、三相不平衡 | `scope`、`start`、`end`、`powerFactorThreshold?`、`nominalVoltageV?` | `ctx.nilmTimeseries.queryAnalysisSamples` + `ctx.nilmAnalytics.analyzePowerQuality` | 能量加权 PF、极值、逐阶谐波含有率、风险、`ChartSpec` |
 | `nilm_safety_query` | 隐患检索与详情 | `scope`、`start`、`end`、`severity?`、`limit?` | `ctx.nilmSafety.queryUnsafeRecords` | 事件列表、点位、越限值、处置事实 |
-| `nilm_timeseries_analyze` | 秒级特征、电器反推、微观隐患 | `scope`、`timeRange`（<=4h）、`analysisMode` | `ctx.nilmAnalytics.analyzeTimeseries` | 突变事件、电器候选及置信度依据、潜在隐患、`ChartSpec` |
+| `nilm_timeseries_analyze` | 秒级特征、电器反推、微观隐患 | `scope`、`start`、`end`（<=4h）、`analysisMode?`、`thresholdKw?`、`minDeltaKw?` | `ctx.nilmTimeseries.queryAnalysisSamples` + `ctx.nilmAnalytics.detectTimeSeriesFeatures` | 突变事件、启停循环、特征与隐患、`ChartSpec` |
 
 `nilm_appliance_query` 不暴露 `idleThreshold`；空载阈值由租户/设备品类配置控制，模型只能选择范围、时间与品类，避免用参数把“浪费”算小或算大。阶段 1 上游没有空载状态列，因此该 Tool 只返回运行、停止与未知时长，并明确说明未推断空载。
 
@@ -838,18 +838,10 @@ export function registerTimeseriesAnalyzeTool(ctx: Context): void {
           name: { type: 'string' },
         },
       },
-      timeRange: {
-        type: 'object',
-        required: true,
-        additionalProperties: false,
-        properties: {
-          start: { type: 'string', required: true },
-          end: { type: 'string', required: true },
-        },
-      },
+      start: { type: 'string', required: true },
+      end: { type: 'string', required: true },
       analysisMode: {
         type: 'string',
-        required: true,
         enum: ['disaggregation_only', 'hazard_diagnosis', 'comprehensive'],
       },
     },
@@ -898,12 +890,13 @@ export function registerTimeseriesAnalyzeTool(ctx: Context): void {
       const agentId = exec.agent?.id
       if (!agentId) throw new NilmToolError('TENANT_CONTEXT_UNAVAILABLE')
       const callContext = ctx.nilmContext.require(agentId)
-      return ctx.nilmAnalytics.analyzeTimeseries({
-        callContext,
-        scope: args.scope,
-        range: { start: args.timeRange.start, end: args.timeRange.end, timeZone: 'Asia/Shanghai', granularity: 'second' },
-        analysisMode: args.analysisMode,
-      })
+      const resolved = await ctx.nilmAssets.resolveScope(callContext, args.scope)
+      const range = { start: args.start, end: args.end, timeZone: 'Asia/Shanghai', granularity: 'second' }
+      const query = await ctx.nilmTimeseries.queryAnalysisSamples(callContext, resolved.meterSet, range)
+      return ctx.nilmAnalytics.detectTimeSeriesFeatures(
+        query.samples,
+        { startMs: Date.parse(args.start), endMs: Date.parse(args.end) },
+      )
     },
   }))
 }

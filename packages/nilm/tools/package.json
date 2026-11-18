@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-nilm-tools",
-  "description": "NILM model-facing scope, energy, and safety tools with bounded structured results",
+  "description": "NILM model-facing scope, energy, power-quality, timeseries, and safety tools with bounded structured results",
   "version": "0.2.2-rc.3",
   "private": true,
   "type": "module",

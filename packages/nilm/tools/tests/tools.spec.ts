@@ -11,8 +11,16 @@ import type {
   TenantId,
   TerminalId,
 } from '@deepseek-ai/dsh-nilm-core'
-import type { ApplianceUsage, CompareTrend, CostBreakdown } from '@deepseek-ai/dsh-nilm-analytics'
-import type { ApplianceQueryResult, EnergyQueryResult } from '@deepseek-ai/dsh-nilm-timeseries'
+import {
+  analyzePowerQuality,
+  detectTimeSeriesFeatures,
+  type ApplianceUsage,
+  type CompareTrend,
+  type CostBreakdown,
+  type TimeSeriesFeature,
+  type TimeSeriesFeatureResult,
+} from '@deepseek-ai/dsh-nilm-analytics'
+import type { AnalysisQueryResult, AnalysisSample, ApplianceQueryResult, EnergyQueryResult } from '@deepseek-ai/dsh-nilm-timeseries'
 import type { SafetyQueryResult } from '@deepseek-ai/dsh-nilm-safety'
 import type { TariffPlan, TariffSegmentation } from '@deepseek-ai/dsh-nilm-tariff'
 import { applyTools, type NilmToolHost } from '../src/index.ts'
@@ -75,6 +83,57 @@ function appliances(overrides: Partial<ApplianceQueryResult> = {}): ApplianceQue
   }
 }
 
+function analysisSample(overrides: Partial<AnalysisSample> & { tsMs: number }): AnalysisSample {
+  return {
+    terminalId: 't1',
+    channelId: 'c1' as ChannelId,
+    powerKw: 10,
+    reactivePowerKvar: 2,
+    powerFactor: 0.98,
+    harmonicCurrentA: { '1': 90, '2': null, '3': 12, '5': 3, '7': 1 },
+    voltageV: 220,
+    currentA: 20,
+    lineVoltageV: null,
+    lineCurrentA: null,
+    ...overrides,
+  }
+}
+
+function analysis(samples?: AnalysisSample[]): AnalysisQueryResult {
+  return {
+    samples: samples ?? [
+      analysisSample({ tsMs: START }),
+      analysisSample({ tsMs: START + 60_000 }),
+    ],
+    dataQuality: quality,
+    warnings: [],
+  }
+}
+
+function feature(overrides: Partial<TimeSeriesFeature> = {}): TimeSeriesFeature {
+  return {
+    atMs: START + 60_000,
+    direction: 'up',
+    beforeKw: 1,
+    afterKw: 6,
+    deltaKw: 5,
+    deltaReactiveKvar: 1,
+    durationMs: 120_000,
+    inrushRatio: 2.5,
+    inrushDurationMs: 2_000,
+    phaseImbalancePct: 3,
+    harmonicDeltaA: { 3: 0.5, 5: 0.2, 7: 0.1 },
+    powerFactorBefore: 0.98,
+    powerFactorAfter: 0.96,
+    powerFactorDelta: -0.02,
+    ...overrides,
+  }
+}
+
+function features(overrides: Partial<TimeSeriesFeatureResult> = {}): TimeSeriesFeatureResult {
+  return { events: [feature()], cycles: [], hazards: [], coverage: 1, warnings: [], ...overrides }
+}
+
 function usage(overrides: Partial<ApplianceUsage> = {}): ApplianceUsage {
   return {
     terminalId: 't1',
@@ -123,6 +182,8 @@ function host(options: {
   appliances?: ApplianceQueryResult
   usages?: ApplianceUsage[]
   safety?: SafetyQueryResult
+  analysis?: AnalysisQueryResult
+  features?: TimeSeriesFeatureResult
 } = {}): { host: NilmToolHost; registered: Map<string, ToolDefinition>; calls: Array<Record<string, unknown>> } {
   const registered = new Map<string, ToolDefinition>()
   const calls: Array<Record<string, unknown>> = []
@@ -146,6 +207,10 @@ function host(options: {
         calls.push({ category })
         return options.appliances ?? appliances()
       },
+      queryAnalysisSamples: async () => {
+        calls.push({ analysis: true })
+        return options.analysis ?? analysis()
+      },
     },
     nilmTariff: {
       effectivePlan: async () => plan,
@@ -155,6 +220,10 @@ function host(options: {
       calculateEnergyCosts: () => cost,
       calculateCompareTrends: () => trend,
       summarizeApplianceStates: () => options.usages ?? [usage()],
+      analyzePowerQuality: (samples, window, powerQualityOptions) =>
+        analyzePowerQuality(samples, window, powerQualityOptions),
+      detectTimeSeriesFeatures: (samples, window, cusumOptions) =>
+        options.features ?? detectTimeSeriesFeatures(samples, window, cusumOptions),
     },
     nilmSafety: {
       queryUnsafeRecords: async (_context, input) => {
@@ -182,11 +251,16 @@ async function execute(definition: ToolDefinition, args: unknown): Promise<Recor
 }
 
 describe('nilm tools', () => {
-  it('registers four closed-schema tools', () => {
+  it('registers six closed-schema tools', () => {
     const { host: h, registered } = host()
     applyTools(h)
     expect([...registered.keys()]).toEqual([
-      'nilm_scope_resolve', 'nilm_appliance_query', 'nilm_energy_query', 'nilm_safety_query',
+      'nilm_scope_resolve',
+      'nilm_appliance_query',
+      'nilm_energy_query',
+      'nilm_power_quality_query',
+      'nilm_timeseries_analyze',
+      'nilm_safety_query',
     ])
     for (const tool of registered.values()) expect(tool.parameters.additionalProperties).toBe(false)
   })
@@ -261,6 +335,96 @@ describe('nilm tools', () => {
     expect((JSON.parse(rendered[0]!.text) as Record<string, unknown>).chart).toBeUndefined()
     const meta = tool.output.presentationMeta?.(args, result) as Record<string, unknown>
     expect((meta.chart as Record<string, unknown>).version).toBe(1)
+  })
+
+  it('calculates energy-weighted power quality and keeps harmonic charts out of model content', async () => {
+    const { host: h, registered } = host()
+    applyTools(h)
+    const tool = registered.get('nilm_power_quality_query')!
+    const args = {
+      scope: { level: 'channel', id: 'c1' },
+      start: new Date(START).toISOString(),
+      end: new Date(START + 60_000).toISOString(),
+    }
+    const result = await execute(tool, args)
+    const facts = result.facts as Record<string, unknown>
+    expect(facts.energyWeightedPowerFactor).toBe(0.981)
+    expect(facts.powerFactorRisk).toBe('ok')
+    expect(facts.sampleCoverage).toBe(1)
+    expect((facts.harmonicBands as Array<Record<string, unknown>>).find(band => band.order === 3)?.meanPct).toBeCloseTo(13.3333, 3)
+    expect(result.summaryText as string).toContain('能量加权功率因数 0.981')
+    const chart = result.chart as Record<string, unknown>
+    expect(chart.version).toBe(1)
+    expect(chart.unit).toBe('%')
+    expect((chart.series as unknown[]).length).toBe(3)
+    const rendered = tool.output.render(args, result)
+    expect((JSON.parse(rendered[0]!.text) as Record<string, unknown>).chart).toBeUndefined()
+    expect((tool.output.presentationMeta?.(args, result) as Record<string, unknown>).chart).toMatchObject({ unit: '%' })
+  })
+
+  it('does not invent power-quality values when no sample is available', async () => {
+    const { host: h, registered } = host({ analysis: { samples: [], dataQuality: quality, warnings: [] } })
+    applyTools(h)
+    const result = await execute(registered.get('nilm_power_quality_query')!, {
+      scope: { level: 'channel', id: 'c1' },
+      start: new Date(START).toISOString(),
+      end: new Date(END).toISOString(),
+    })
+    const facts = result.facts as Record<string, unknown>
+    expect(facts.dataAvailable).toBe(false)
+    expect(facts.energyWeightedPowerFactor).toBe(null)
+    expect(result.warnings as string[]).toContain('no realtime sample matched the requested scope and range')
+  })
+
+  it('analyzes a short second-level window and emits bounded chart annotations', async () => {
+    const samples = Array.from({ length: 181 }, (_, index) => analysisSample({
+      tsMs: START + index * 1000,
+      powerKw: index < 60 ? 1 : 6,
+      reactivePowerKvar: 0.2,
+    }))
+    const { host: h, registered } = host({ analysis: analysis(samples) })
+    applyTools(h)
+    const tool = registered.get('nilm_timeseries_analyze')!
+    const args = {
+      scope: { level: 'channel', id: 'c1' },
+      start: new Date(START).toISOString(),
+      end: new Date(START + 180_000).toISOString(),
+      analysisMode: 'comprehensive',
+    }
+    const result = await execute(tool, args)
+    const facts = result.facts as Record<string, unknown>
+    expect((facts.events as unknown[]).length).toBe(1)
+    expect(result.summaryText as string).toContain('检测到 1 个功率突变')
+    const chart = result.chart as Record<string, unknown>
+    expect(chart.version).toBe(1)
+    expect((chart.series as Array<{ data: unknown[] }>)[0]!.data.length <= 500).toBe(true)
+    const annotations = chart.annotations as Array<Record<string, unknown>>
+    expect(annotations).toHaveLength(1)
+    expect(Object.keys(annotations[0]!).sort()).toEqual(['at', 'label', 'severity'])
+    expect(annotations[0]!.severity).toBe('info')
+    expect(JSON.stringify(chart).includes('markLine')).toBe(false)
+    expect(JSON.stringify(chart).includes('markPoint')).toBe(false)
+  })
+
+  it('hides hazards in disaggregation-only mode and rejects windows longer than four hours', async () => {
+    const { host: h, registered } = host({
+      features: features({
+        hazards: [{ kind: 'frequent_cycling', severity: 'warning', atMs: START + 60_000, evidence: { starts: 6 } }],
+      }),
+    })
+    applyTools(h)
+    const tool = registered.get('nilm_timeseries_analyze')!
+    const start = new Date(START).toISOString()
+    const end = new Date(START + 180_000).toISOString()
+    const hidden = await execute(tool, { scope: { level: 'channel', id: 'c1' }, start, end, analysisMode: 'disaggregation_only' })
+    expect((hidden.facts as Record<string, unknown>).hazards).toEqual([])
+    const shown = await execute(tool, { scope: { level: 'channel', id: 'c1' }, start, end, analysisMode: 'comprehensive' })
+    expect(((shown.facts as Record<string, unknown>).hazards as unknown[]).length).toBe(1)
+    await expect(execute(tool, {
+      scope: { level: 'channel', id: 'c1' },
+      start,
+      end: new Date(START + 4 * HOUR + 1000).toISOString(),
+    })).rejects.toThrow('four hours')
   })
 
   it('summarizes appliances and residual against terminal energy', async () => {

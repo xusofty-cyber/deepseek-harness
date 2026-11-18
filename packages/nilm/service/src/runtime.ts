@@ -286,6 +286,8 @@ function toolTitle(name: string): string {
     case 'nilm_scope_resolve': return '解析工厂范围'
     case 'nilm_energy_query': return '查询用电与电费'
     case 'nilm_appliance_query': return '查询设备运行工况'
+    case 'nilm_power_quality_query': return '分析电能质量'
+    case 'nilm_timeseries_analyze': return '分析秒级负荷特征'
     case 'nilm_safety_query': return '查询电气安全事件'
     default: return name
   }

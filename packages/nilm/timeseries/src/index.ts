@@ -77,6 +77,61 @@ export interface ApplianceQueryResult {
   warnings: string[]
 }
 
+/** Realtime columns fetched for power-quality and edge analysis. */
+export const ANALYSIS_METRICS = [
+  'power',
+  'reactive_power',
+  'power_factor',
+  'ih1',
+  'ih2',
+  'ih3',
+  'ih5',
+  'ih7',
+  'urms',
+  'irms',
+  'line_voltage',
+  'line_current',
+] as const
+
+/** One accepted analysis metric. */
+export type AnalysisMetric = typeof ANALYSIS_METRICS[number]
+
+/** One raw realtime row kept for deterministic analysis. */
+export interface AnalysisSample {
+  /** Sample instant in epoch milliseconds. */
+  tsMs: number
+  /** Authorized terminal. */
+  terminalId: string
+  /** Authorized channel. */
+  channelId: MeterPoint['channelId']
+  /** Active power in kW. */
+  powerKw: number | null
+  /** Reactive power in kvar. */
+  reactivePowerKvar: number | null
+  /** Upstream power factor. */
+  powerFactor: number | null
+  /** Harmonic current magnitudes in amperes. */
+  harmonicCurrentA: Partial<Record<'1' | '2' | '3' | '5' | '7', number | null>>
+  /** RMS voltage in volts. */
+  voltageV: number | null
+  /** RMS current in amperes. */
+  currentA: number | null
+  /** Line voltage in volts. */
+  lineVoltageV: number | null
+  /** Line current in amperes. */
+  lineCurrentA: number | null
+}
+
+/** Raw analysis query result with its quality envelope. */
+export interface AnalysisQueryResult {
+  /** Samples in ascending time order. */
+  samples: AnalysisSample[]
+  /** Coverage, provenance, gaps, and warnings. */
+  dataQuality: NilmDataQuality
+  /** Non-fatal routing or limit caveats. */
+  warnings: string[]
+}
+
 /** Minimal source operations consumed by this adapter. */
 export interface TimeseriesSource {
   /**
@@ -313,6 +368,57 @@ export class NilmTimeseriesService extends Service {
     return { points, dataQuality, warnings }
   }
 
+  /**
+   * Query raw realtime rows for deterministic power-quality and edge analysis.
+   * This route is not downsampled: it keeps one row per timestamp up to
+   * `analysisPointLimit` so CUSUM sees the original transitions.
+   * @param callContext - verified caller identity.
+   * @param meterSet - non-overlapping authorized meters.
+   * @param range - half-open business range.
+   * @param signal - optional caller cancellation.
+   * @returns raw samples, coverage, and limit caveats.
+   */
+  async queryAnalysisSamples(
+    callContext: CallContext,
+    meterSet: readonly MeterPoint[],
+    range: TimeRangeSpec,
+    signal?: AbortSignal,
+  ): Promise<AnalysisQueryResult> {
+    requireContext(callContext)
+    const window = parseRange(range)
+    const warnings: string[] = []
+    const samples: AnalysisSample[] = []
+    const perMeterLimit = Math.max(1, Math.floor(this.config.analysisPointLimit / Math.max(1, meterSet.length)))
+    if (meterSet.length > 1) {
+      warnings.push(`analysis budget of ${String(this.config.analysisPointLimit)} samples was split across ${String(meterSet.length)} meters at ${String(perMeterLimit)} samples each; narrow the scope for full resolution`)
+    }
+    for (const meter of meterSet) {
+      const channel = meter.channelId as string
+      const sql = `SELECT ts, power, reactive_power, power_factor, ih1, ih2, ih3, ih5, ih7, urms, irms, line_voltage, line_current
+        FROM ${identifier(this.config.realtimeTable)}
+        WHERE association_asset = '${safeId(channel)}' AND ts >= ${String(window.startMs)} AND ts < ${String(window.endMs)}
+        ORDER BY ts LIMIT ${String(perMeterLimit + 1)}`
+      const rows = await this.source.queryHot<Record<string, unknown>>(sql, signal)
+      if (rows.length > perMeterLimit) {
+        warnings.push(`meter ${channel} analysis rows were capped at ${String(perMeterLimit)} samples`)
+      }
+      for (const row of rows.slice(0, perMeterLimit)) {
+        const sample = analysisSample(row, meter)
+        if (sample !== undefined) samples.push(sample)
+      }
+    }
+    samples.sort((left, right) => left.tsMs - right.tsMs || (left.channelId as string).localeCompare(right.channelId as string))
+    const dataQuality = quality(
+      window,
+      uniqueTimestamps(samples),
+      granularityMs(range.granularity),
+      'raw',
+      warnings,
+      this.now(),
+    )
+    return { samples, dataQuality, warnings }
+  }
+
   private async realtimeRows(
     table: string,
     channel: string,
@@ -460,6 +566,40 @@ export class NilmTimeseriesService extends Service {
 interface Window {
   startMs: number
   endMs: number
+}
+
+function analysisSample(row: Record<string, unknown>, meter: MeterPoint): AnalysisSample | undefined {
+  const harmonicCurrentA: AnalysisSample['harmonicCurrentA'] = {
+    1: nullable(row.ih1),
+    2: nullable(row.ih2),
+    3: nullable(row.ih3),
+    5: nullable(row.ih5),
+    7: nullable(row.ih7),
+  }
+  const sample: AnalysisSample = {
+    tsMs: timestamp(row.ts),
+    terminalId: meter.terminalId as string,
+    channelId: meter.channelId,
+    powerKw: nullable(row.power),
+    reactivePowerKvar: nullable(row.reactive_power),
+    powerFactor: nullable(row.power_factor),
+    harmonicCurrentA,
+    voltageV: nullable(row.urms),
+    currentA: nullable(row.irms),
+    lineVoltageV: nullable(row.line_voltage),
+    lineCurrentA: nullable(row.line_current),
+  }
+  const numeric = [
+    sample.powerKw,
+    sample.reactivePowerKvar,
+    sample.powerFactor,
+    sample.voltageV,
+    sample.currentA,
+    sample.lineVoltageV,
+    sample.lineCurrentA,
+    ...Object.values(harmonicCurrentA),
+  ]
+  return numeric.some(value => value !== null && value !== undefined) ? sample : undefined
 }
 
 function sourcePort(source: NilmSourceService): TimeseriesSource {

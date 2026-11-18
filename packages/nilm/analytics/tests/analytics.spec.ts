@@ -1,7 +1,8 @@
+import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import { NilmError } from '@deepseek-ai/dsh-nilm-core'
 import type { TariffSlice } from '@deepseek-ai/dsh-nilm-tariff'
-import {
+import NilmAnalyticsService, {
   calculateCompareTrends,
   calculateEnergyCosts,
   calculateRunningAndIdleTime,
@@ -277,5 +278,29 @@ describe('summarizeApplianceStates', () => {
       .toContain('a single sample cannot establish a reliable state duration')
     expect(codeOf(() => summarizeApplianceStates([], { startMs: t0, endMs: t0 }))).toBe('INVALID_ARGUMENT')
     expect(codeOf(() => summarizeApplianceStates([], { startMs: t0, endMs: t0 + 1 }, 0))).toBe('INVALID_ARGUMENT')
+  })
+})
+
+
+describe('NilmAnalyticsService facade', () => {
+  it('delegates power-quality and CUSUM operations to the pure functions', async () => {
+    const ctx = new Context()
+    const service = new NilmAnalyticsService(ctx)
+    try {
+      expect(service.energyWeightedPowerFactor(800, 600)).toBeCloseTo(0.8, 9)
+      const power = service.analyzePowerQuality([
+        { tsMs: t0, activePowerKw: 10, reactivePowerKvar: 2, powerFactor: 0.98, harmonicCurrentA: {} },
+        { tsMs: t0 + 1000, activePowerKw: 10, reactivePowerKvar: 2, powerFactor: 0.98, harmonicCurrentA: {} },
+      ], { startMs: t0, endMs: t0 + 1000 })
+      expect(power.activeEnergyKwh).toBeCloseTo(10 / 3600, 9)
+      const features = service.detectTimeSeriesFeatures([
+        { tsMs: t0, powerKw: 1 },
+        { tsMs: t0 + 1000, powerKw: 1 },
+      ], { startMs: t0, endMs: t0 + 2000 })
+      expect(features.events).toEqual([])
+      expect(features.coverage).toBeCloseTo(0.5, 9)
+    } finally {
+      await ctx.fiber.dispose()
+    }
   })
 })

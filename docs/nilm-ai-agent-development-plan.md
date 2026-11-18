@@ -186,20 +186,33 @@ flowchart LR
 
 ### 4.2 交付成果物清单
 
-- `packages/nilm/analytics/src/cusum.ts` 纯函数边沿检测与特征提取源码；
-- `packages/nilm/analytics/src/power-factor.ts` 功率因数测算源码；
-- `packages/nilm/tools/src/definitions/power-quality-query.ts`；
-- `packages/nilm/tools/src/definitions/timeseries-analyze.ts`；
-- 边沿检测基准波形测试集（包含电机启动、加热管投入、工频风机跳变、采样断档等基准波形）。
+- `packages/nilm/analytics/src/power-quality.ts`：能量加权功率因数、逐阶谐波含有率、电压偏差与不平衡度纯函数；
+- `packages/nilm/analytics/src/cusum.ts`：CUSUM 边沿检测、过渡期去重、循环配对、特征向量与四类隐患规则；
+- `packages/nilm/timeseries/src/index.ts` 的 `queryAnalysisSamples`：原始实时行取数，`analysisPointLimit` 作为单次总预算按计量点均分；
+- `packages/nilm/tools/src/index.ts` 中的 `nilm_power_quality_query` 与 `nilm_timeseries_analyze`；
+- `packages/nilm/analytics/tests/power-quality.spec.ts`、`cusum.spec.ts` 基准波形与算法测试；
+- `packages/nilm/timeseries/tests/timeseries.spec.ts`、`packages/nilm/tools/tests/tools.spec.ts` 的查询与工具契约测试。
 
 ### 4.3 成果验证方法与证据门（Evidence Gates）
 
 | 验证项 | 验证方法与执行命令 | 预期通过标准（证据门） |
 | :--- | :--- | :--- |
 | **G2-1: 边沿检测与特征算法精度验证** | 运行离线基准数据集回放测试 `pnpm --filter @deepseek-ai/dsh-nilm-analytics test:cusum` | 在含有工业白噪声的仿真波形上，启停边沿检出率（Recall）≥ 98%，精确率（Precision）≥ 95%；冲击比计算误差 < 2% |
-| **G2-2: 秒级查询与降维性能压测** | 针对真实 TDengine 连续抽取 4 小时（14,400 秒点）执行特征分析 `pnpm test:perf:timeseries` | 端到端取数 + CUSUM 边沿提取 + 降维耗时 **p95 < 2.5 秒**；输出给大模型的事件列表体积严格 **< 4 KB** |
+| **G2-2: 秒级查询与降维性能压测** | 离线算法基线与降维体积用 `pnpm test:perf:timeseries`；具备真实 TDengine 只读凭证后，对同一 4 小时（14,400 秒点）执行端到端回放 | 离线算法 + 降维 p95 **< 2.5 秒**、事件 JSON **< 4 KB**；端到端取数整体 p95 **< 2.5 秒**（部署环境证据，离线结果不可替代） |
 | **G2-3: 四类微观用电隐患诊断验证** | 构造 4 组包含典型隐患的时序特征测试用例进行 Agent 问答评测 | 4 组用例全部命中预期隐患类型；每组至少引用 2 个来自 Tool 事实的证据字段（ΔP/ΔQ、谐波增量、不平衡度、持续时间）；排查建议包含可执行动作；不得出现 fixture 之外的数字 |
 | **G2-4: 秒级波形 ChartSpec 渲染协议合规** | 检查 `nilm_timeseries_analyze` 输出的 `presentationMeta.chart` 结构 | 图表协议符合 `ChartSpec v1` 规范：序列点数 ≤ 500，事件标注位于 `annotations` 且字段为 `{ at, label, severity }`；不含 `markLine`/`markPoint`；客户端按 v1 渲染通过 |
+
+### 4.4 阶段 2 实现状态与部署前置
+
+已完成：能量加权功率因数与风险分级、2/3/5/7 次逐阶谐波含有率、电压偏差、CUSUM 边沿检测与同向过渡去重、启停循环配对、冲击比/三相不平衡/谐波指纹特征、四类微观隐患规则、`nilm_power_quality_query` 与 `nilm_timeseries_analyze` 两个 Tool、秒级波形 `ChartSpec v1` 的 `annotations` 降采样图表，以及原始实时行取数与逐计量点上限。离线基准波形测试覆盖电机启动、加热管投入、工频风机跳变、相位不平衡、谐波谐振、启动迟滞、频繁启停与采样断档；4 小时 14,400 点的算法耗时与事件 JSON 体积在离线回放中满足 `< 2.5 s` 与 `< 4 KB`。
+
+以下为明确的部署前置，不伪装成已交付：
+
+- `G2-2` 的**端到端** p95 必须在具备 TDengine 只读凭证的环境中实测，离线回放只证明纯算法与降维部分；
+- 月度力调所需的整月 P/Q 预聚合尚未接入；阶段 2 的 PF 只对原始点预算内窗口有效，短窗口结果不能外推为月度达标结论；
+- `nilmdc_realtime_data` 当前投影没有分相电流列，三相不平衡返回 `null` 并告警，不能由 `line_current` 或 `irms` 推算；
+- 完整 THD 不在契约内，谐波只按上游实际提供的阶次返回；
+- `G2-3` 的 Agent 问答评测与 `G2-4` 的客户端 ECharts 渲染验收需要真实模型与客户端参与，本仓库只验证 Tool 事实、图表结构与 `annotations` 字段合规。
 
 ---
 

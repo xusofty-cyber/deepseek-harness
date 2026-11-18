@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-nilm-analytics",
-  "description": "Pure NILM energy-cost, running-time, and period-comparison calculations",
+  "description": "Pure NILM energy-cost, power-quality, CUSUM, running-time, and period-comparison calculations",
   "version": "0.2.2-rc.3",
   "private": true,
   "type": "module",
@@ -31,5 +31,8 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:~"
+  },
+  "scripts": {
+    "test:cusum": "vitest run tests/cusum.spec.ts"
   }
 }

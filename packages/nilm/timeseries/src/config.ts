@@ -22,6 +22,8 @@ export interface TimeseriesConfig {
   applianceTable: string
   /** Maximum raw points fetched per meter and metric family. */
   rawPointLimit: number
+  /** Maximum raw rows fetched across one analysis query, split evenly by meter. */
+  analysisPointLimit: number
   /** Maximum points handed to a chart consumer. */
   chartPointLimit: number
   /** Age after which energy aggregates use the cold proxy. */
@@ -39,6 +41,7 @@ export const DEFAULT_TIMESERIES_CONFIG: TimeseriesConfig = {
   dailyStatsTable: 'consum_energy_day_statistics_info',
   applianceTable: 'nilmdc_appliance_identification',
   rawPointLimit: 2000,
+  analysisPointLimit: 20_000,
   chartPointLimit: 500,
   hotDays: 90,
   coldTemplate: 'daily_energy',
@@ -53,6 +56,7 @@ export const Config: z<TimeseriesConfig> = z.object({
   dailyStatsTable: z.string().default(DEFAULT_TIMESERIES_CONFIG.dailyStatsTable),
   applianceTable: z.string().default(DEFAULT_TIMESERIES_CONFIG.applianceTable),
   rawPointLimit: z.natural().min(1).max(100_000).default(DEFAULT_TIMESERIES_CONFIG.rawPointLimit),
+  analysisPointLimit: z.natural().min(1).max(100_000).default(DEFAULT_TIMESERIES_CONFIG.analysisPointLimit),
   chartPointLimit: z.natural().min(1).max(5_000).default(DEFAULT_TIMESERIES_CONFIG.chartPointLimit),
   hotDays: z.natural().min(1).default(DEFAULT_TIMESERIES_CONFIG.hotDays),
   coldTemplate: z.string().default(DEFAULT_TIMESERIES_CONFIG.coldTemplate),

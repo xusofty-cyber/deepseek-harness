@@ -7,6 +7,19 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { NilmError, type EnergyBucket } from '@deepseek-ai/dsh-nilm-core'
 import type { TariffPeriodType, TariffPlan, TariffSlice } from '@deepseek-ai/dsh-nilm-tariff'
+import {
+  analyzePowerQuality,
+  energyWeightedPowerFactor,
+  type PowerQualityOptions,
+  type PowerQualityResult,
+  type PowerQualitySample,
+} from './power-quality.ts'
+import {
+  detectTimeSeriesFeatures,
+  type CusumOptions,
+  type TimeSeriesFeatureResult,
+  type TimeSeriesSample,
+} from './cusum.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -15,6 +28,31 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export type { EnergyBucket }
+export {
+  analyzePowerQuality,
+  energyWeightedPowerFactor,
+  phaseUnbalancePct,
+  type HarmonicBand,
+  type HarmonicCurrentOrder,
+  type HarmonicOrder,
+  type Phase,
+  type PowerQualityOptions,
+  type PowerQualityResult,
+  type PowerQualitySample,
+} from './power-quality.ts'
+export {
+  detectPowerEdges,
+  detectTimeSeriesFeatures,
+  diagnoseMicroHazards,
+  pairCycles,
+  type CusumOptions,
+  type DetectedEdge,
+  type InferredCycle,
+  type MicroHazard,
+  type TimeSeriesFeature,
+  type TimeSeriesFeatureResult,
+  type TimeSeriesSample,
+} from './cusum.ts'
 
 /** Energy and cost totals split by tariff band. */
 export interface CostBreakdown {
@@ -416,6 +454,46 @@ export class NilmAnalyticsService extends Service {
     maxGapMs?: number,
   ): ApplianceUsage[] {
     return summarizeApplianceStates(points, window, maxGapMs)
+  }
+
+  /**
+   * Calculate billing power factor from active and reactive energy.
+   * @param activeKwh - active energy.
+   * @param reactiveKvarh - reactive energy.
+   * @returns the power factor, or undefined when active energy is not positive.
+   */
+  energyWeightedPowerFactor(activeKwh: number, reactiveKvarh: number): number | undefined {
+    return energyWeightedPowerFactor(activeKwh, reactiveKvarh)
+  }
+
+  /**
+   * Analyze energy-weighted PF, harmonics, unbalance, and voltage deviation.
+   * @param samples - authorized realtime samples.
+   * @param window - half-open analysis window.
+   * @param options - threshold, nominal voltage, and gap limits.
+   * @returns deterministic power-quality totals and caveats.
+   */
+  analyzePowerQuality(
+    samples: readonly PowerQualitySample[],
+    window: { readonly startMs: number; readonly endMs: number },
+    options?: PowerQualityOptions,
+  ): PowerQualityResult {
+    return analyzePowerQuality(samples, window, options)
+  }
+
+  /**
+   * Detect power steps, pair start-stop cycles, and diagnose micro hazards.
+   * @param samples - authorized second-level samples.
+   * @param window - half-open analysis window.
+   * @param options - detection and hazard thresholds.
+   * @returns compact events, cycles, hazards, coverage, and caveats.
+   */
+  detectTimeSeriesFeatures(
+    samples: readonly TimeSeriesSample[],
+    window: { readonly startMs: number; readonly endMs: number },
+    options?: CusumOptions,
+  ): TimeSeriesFeatureResult {
+    return detectTimeSeriesFeatures(samples, window, options)
   }
 }
 

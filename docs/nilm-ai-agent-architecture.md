@@ -901,12 +901,12 @@ Tool 是模型与领域服务之间唯一的业务入口。原则：
 
 | Tool | 用途 | 关键参数 | 主要输出 |
 | :--- | :--- | :--- | :--- |
-| `nilm_energy_query` | 电量、电费、峰平谷、趋势、同比环比 | `scope`、`timeRange`、`compare?`、`includeCost?` | 总量、分时电量、费用、趋势、质量、`ChartSpec` |
-| `nilm_appliance_query` | 设备启停与运行/停止时长 | `scope`、`timeRange`、`applianceCategory?` | 设备列表、运行/停止/未知时长、估算电量、通道残差、质量 |
-| `nilm_power_quality_query` | 功率因数、谐波、电压偏差、三相不平衡 | `scope`、`timeRange`、`metrics?` | 能量加权 PF、极值、谐波含有率、风险、`ChartSpec` |
-| `nilm_safety_query` | 隐患检索与详情 | `scope`、`timeRange`、`types?`、`severity?` | 事件列表、点位、越限值、处置建议所需事实 |
-| `nilm_timeseries_analyze` | 秒级时序算法特征分析、电器反推与潜在微观隐患研判 | `scope`、`timeRange`（短窗口<=4h）、`metrics?`、`analysisMode` | 突变事件特征集、推断电器候选（功率/谐波拟合）、微观异常波动、`ChartSpec` |
-| `nilm_scope_resolve` | 名称/路径解析与歧义澄清 | `query`、`level?` | 候选 Scope、匹配理由、歧义标记 |
+| `nilm_energy_query` | 电量、电费、峰平谷、趋势、同比环比 | `scope`、`start`、`end`、`granularity`、`compare?`、`include_cost?` | 总量、分时电量、费用、趋势、质量、`ChartSpec` |
+| `nilm_appliance_query` | 设备启停与运行/停止时长 | `scope`、`start`、`end`、`applianceCategory?` | 设备列表、运行/停止/未知时长、估算电量、通道残差、质量 |
+| `nilm_power_quality_query` | 功率因数、谐波、电压偏差、三相不平衡 | `scope`、`start`、`end`、`powerFactorThreshold?`、`nominalVoltageV?` | 能量加权 PF、极值、逐阶谐波含有率、风险、`ChartSpec` |
+| `nilm_safety_query` | 隐患检索与详情 | `scope`、`start`、`end`、`severity?`、`limit?` | 事件列表、点位、越限值、处置建议所需事实 |
+| `nilm_timeseries_analyze` | 秒级时序算法特征分析、电器反推与潜在微观隐患研判 | `scope`、`start`、`end`（短窗口<=4h）、`analysisMode?`、`thresholdKw?`、`minDeltaKw?` | 突变事件特征集、启停循环、微观隐患、`ChartSpec` |
+| `nilm_scope_resolve` | 名称/路径解析与歧义澄清 | `level`、`id?`、`name?`、`path?` | 候选 Scope、匹配理由、歧义标记 |
 
 `nilm_scope_resolve` 可以内部调用，也可以在名称模糊时显式返回候选。不要让模型自己拼设备名或猜 ID。
 
@@ -994,18 +994,10 @@ export const nilmTimeseriesAnalyzeTool = defineTool({
         name: { type: 'string' },
       },
     },
-    timeRange: {
-      type: 'object',
-      required: true,
-      additionalProperties: false,
-      properties: {
-        start: { type: 'string', required: true },
-        end: { type: 'string', required: true },
-      },
-    },
+    start: { type: 'string', required: true },
+    end: { type: 'string', required: true },
     analysisMode: {
       type: 'string',
-      required: true,
       enum: ['disaggregation_only', 'hazard_diagnosis', 'comprehensive'],
     },
   },
@@ -1032,12 +1024,13 @@ export const nilmTimeseriesAnalyzeTool = defineTool({
     const agentId = exec.agent?.id
     if (!agentId) throw new NilmToolError('TENANT_CONTEXT_UNAVAILABLE')
     const callContext = ctx.nilmContext.require(agentId)
-    return ctx.nilmAnalytics.analyzeTimeseries({
-      callContext,
-      scope: args.scope,
-      timeRange: args.timeRange,
-      analysisMode: args.analysisMode,
-    })
+    const resolved = await ctx.nilmAssets.resolveScope(callContext, args.scope)
+    const range = { start: args.start, end: args.end, timeZone: 'Asia/Shanghai', granularity: 'second' }
+    const query = await ctx.nilmTimeseries.queryAnalysisSamples(callContext, resolved.meterSet, range)
+    return ctx.nilmAnalytics.detectTimeSeriesFeatures(
+      query.samples,
+      { startMs: Date.parse(args.start), endMs: Date.parse(args.end) },
+    )
   },
 })
 ```
@@ -1258,6 +1251,8 @@ function energyWeightedPowerFactor(pKWh: number, qKvarh: number): number | undef
 }
 ```
 
+功率因数按窗口内累计有功与无功电量计算，不采用上游逐点 `power_factor` 的算术平均。原始实时点预算决定单次可积分窗口：1 秒采样下单通道约 5.5 小时，超过预算时 `sampleCoverage` 会低于 1 并在结果中告警。**月度力调结论不能由短窗口 PF 外推**；阶段 2 只交付短窗口能量加权 PF，月度 P/Q 预聚合（或上游累计无功电量字段）在具备真实 DDL 与只读数据后接入。
+
 设备运行时长（去抖 + 断档）：
 
 ```ts
@@ -1348,13 +1343,15 @@ interface NilmToolResult<T> {
    - 解决方案：**重度数值计算与边沿特征工程下沉至 `nilm-analytics` 确定性算法引擎；高维模式匹配、机理特征库对齐、因果诊断与自然语言表达由 Agent 承担**。
 
 2. **阶段一：秒级时序特征提取（`nilm-analytics` 纯函数算法引擎）**：
-   - **边沿突变检测（Edge Step Detection）**：通过双边滑动窗均值滤波与 CUSUM（累积和）算法，滤除工业现场固有白噪声（如 $\Delta P < 0.2\,\text{kW}$），精准捕获负荷启停或工况跳变瞬间 $t_k$；
+   - **边沿突变检测（Edge Step Detection）**：通过中心滑动均值滤波与 CUSUM（累积和）算法，滤除工业现场固有白噪声（如 $\Delta P < 0.2\,\text{kW}$），精准捕获负荷启停或工况跳变瞬间 $t_k$；同一滑动均值过渡期产生的同向重复检出按 10 秒合并窗口折叠为一个事件，避免一个台阶被报成多次；
    - **事件特征向量提取（Feature Vectorization）**：对每个检测到的突变边沿，提取以下紧凑特征：
      - **稳态台阶**：有功阶跃 $\Delta P$ (kW)、无功阶跃 $\Delta Q$ (kvar)、稳态持续时长 $\Delta t$；
      - **暂态冲击**：启动电流峰值与稳态电流之比（冲击比 $I_{\text{peak}} / I_{\text{steady}}$，例如异步电动机直启为 5~8 倍、变频软启为 1.5~2.5 倍、纯阻加热器为 1.0~1.1 倍）；
-     - **相别与平衡度**：单相投入（如 220V 单相焊机/电炉）还是三相平衡投入（三相电机/压缩机）；
-     - **谐波指纹**：奇次谐波电流增量（$\Delta I_3, \Delta I_5, \Delta I_7$）及总谐波畸变率变化 $\Delta \text{THD-I}$（区分晶闸管调压/整流/变频驱动与线性负载）。
-   - **数据降维压缩**：将数万个时序点位压缩为不超过 20 个紧凑事件元组（JSON 体积 < 4 KB），经由 `nilm_timeseries_analyze` 交付给 Agent。
+     - **相别与平衡度**：单相投入（如 220V 单相焊机/电炉）还是三相平衡投入（三相电机/压缩机）；该特征仅在上游提供分相电流时计算，当前 `nilmdc_realtime_data` 投影没有分相电流列，工具返回 `null` 并告警，绝不由线电流推算；
+     - **谐波指纹**：奇次谐波电流增量（$\Delta I_3, \Delta I_5, \Delta I_7$）与投入前后功率因数，用于区分晶闸管调压/整流/变频驱动与线性负载；不计算完整 $\Delta \text{THD-I}$；
+     - **功率因数**：投入前后均值与增量，只作为事件特征，不作为计费功率因数。
+   - **数据降维压缩**：将数万个时序点位压缩为不超过 20 个紧凑事件元组（JSON 体积 < 4 KB），经由 `nilm_timeseries_analyze` 交付给 Agent；原始波形只进入 `presentationMeta.chart`，不进入模型上下文。
+   - **多计量点**：每个已解析计量点独立执行 CUSUM，事件与隐患按时间合并后再次限制为 20 条；波形图仅在单计量点时生成，避免把不同通道拼成一条伪波形。
 
 3. **阶段二：Agent 知识协同推理与隐患研判（`nilm_timeseries_analyze`）**：
    - **电器逆向反推（Appliance Disaggregation Inference）**：
