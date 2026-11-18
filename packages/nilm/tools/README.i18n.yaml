@@ -1,0 +1,31 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/nilm/tools/README.md
+/deepseek-ai-dsh-nilm-tools:
+  en: b95483c5b2de02fa
+  zh: 20abbdf726fa7975
+/deepseek-ai-dsh-nilm-tools/configuration:
+  en: 334befe40bb24d38
+  zh: 565256e4cea3b15f
+/deepseek-ai-dsh-nilm-tools/extension-points:
+  en: 142960b215e7a3f1
+  zh: e69cbeaecec1799c
+/deepseek-ai-dsh-nilm-tools/model-experience:
+  en: 215e7ba838619b7b
+  zh: 215e7ba838619b7b
+/deepseek-ai-dsh-nilm-tools/model-experience/nilm-tool-surface:
+  en: d8f9ea6f74cc01ba
+  zh: ccfe7e0968d19515
+/deepseek-ai-dsh-nilm-tools/model-experience/nilm-tool-surface/what-the-model-sees:
+  en: 6918501f5244f0d1
+  zh: 942da7d61cfa278d
+/deepseek-ai-dsh-nilm-tools/model-experience/nilm-tool-surface/token-effect:
+  en: dd99935d0e2d60ca
+  zh: b842f80623c10fbd
+/deepseek-ai-dsh-nilm-tools/model-experience/nilm-tool-surface/kv-cache-effect:
+  en: 3a33c71a8ae93f0a
+  zh: f6969e21ca30ae50
+/deepseek-ai-dsh-nilm-tools/known-limitations-and-deferred-work:
+  en: f3e5c4be41fb060f
+  zh: 6c6394c6a9be2297

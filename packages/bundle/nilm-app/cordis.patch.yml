@@ -1,0 +1,124 @@
+# Standalone NILM production tree. This insert is the complete Cordis tree;
+# it does not layer over dsh-base and does not load sdk-minimal.
+# Environment-specific endpoints and credentials come from the profile patch
+# or K8s Secret. No address or account is embedded here.
+
+- insert:
+    - id: llm-deepseek
+      name: '@deepseek-ai/dsh-llm-deepseek-api-key'
+      config:
+        apiKeyEnv: NILM_DEEPSEEK_API_KEY
+        defaultContextWindow: !!js Number(process.env.DSH_CONTEXT_WINDOW ?? 1000000)
+        streamIdleTimeoutMs: 172800000
+
+    - id: timer
+      name: '@deepseek-ai/cordis-plugin-timer'
+
+    - id: llm
+      name: '@deepseek-ai/dsh-llm'
+
+    - id: llm-retry
+      name: '@deepseek-ai/dsh-llm-retry'
+
+    - id: session
+      name: '@deepseek-ai/dsh-session'
+
+    - id: session-projection
+      name: '@deepseek-ai/dsh-session-projection'
+
+    - id: token-meter
+      name: '@deepseek-ai/dsh-token-meter'
+
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: system-prompt
+      name: '@deepseek-ai/dsh-system-prompt'
+      config:
+        includeHarnessIdentity: false
+        includeRuntimeContext: false
+
+    - id: tools
+      name: '@deepseek-ai/dsh-tools'
+
+    - id: tool-executor-native
+      name: '@deepseek-ai/dsh-tool-executor-native'
+
+    - id: agent
+      name: '@deepseek-ai/dsh-agent'
+
+    - id: agent-loop
+      name: '@deepseek-ai/dsh-agent-loop'
+      config:
+        agents: []
+
+    - id: sessions
+      name: '@deepseek-ai/dsh-session-persistence-jsonl'
+      config:
+        root: !!js dshHomePath('sessions')
+        compression: none
+
+    - id: session-checkpoint-policy
+      name: '@deepseek-ai/dsh-session-checkpoint-policy'
+
+    - id: nilm-context
+      name: '@deepseek-ai/dsh-nilm-context'
+
+    - id: nilm-source
+      name: '@deepseek-ai/dsh-nilm-source'
+      config:
+        localMysql:
+          host: !!js process.env.NILM_LOCAL_MYSQL_HOST
+          port: !!js Number(process.env.NILM_LOCAL_MYSQL_PORT ?? 3306)
+          user: !!js process.env.NILM_LOCAL_MYSQL_USER
+          password: !!js process.env.NILM_LOCAL_MYSQL_PASSWORD
+          database: !!js process.env.NILM_LOCAL_MYSQL_DATABASE
+        upstreamMysql:
+          host: !!js process.env.NILM_UPSTREAM_MYSQL_HOST
+          port: !!js Number(process.env.NILM_UPSTREAM_MYSQL_PORT ?? 3306)
+          user: !!js process.env.NILM_UPSTREAM_MYSQL_USER
+          password: !!js process.env.NILM_UPSTREAM_MYSQL_PASSWORD
+          database: !!js process.env.NILM_UPSTREAM_MYSQL_DATABASE
+        tdengineHotUrl: !!js process.env.NILM_UPSTREAM_TDENGINE_HOT_URL
+        tdengineStatsUrl: !!js process.env.NILM_UPSTREAM_TDENGINE_STATS_URL
+        tdengineUser: !!js process.env.NILM_UPSTREAM_TDENGINE_USER
+        tdenginePassword: !!js process.env.NILM_UPSTREAM_TDENGINE_PASSWORD
+        coldProxyUrl: !!js process.env.NILM_COLD_PROXY_URL
+
+    - id: nilm-assets
+      name: '@deepseek-ai/dsh-nilm-assets'
+
+    - id: nilm-timeseries
+      name: '@deepseek-ai/dsh-nilm-timeseries'
+
+    - id: nilm-tariff
+      name: '@deepseek-ai/dsh-nilm-tariff'
+
+    - id: nilm-analytics
+      name: '@deepseek-ai/dsh-nilm-analytics'
+
+    - id: nilm-safety
+      name: '@deepseek-ai/dsh-nilm-safety'
+
+    - id: nilm-prompt
+      name: '@deepseek-ai/dsh-nilm-prompt'
+
+    - id: nilm-tools
+      name: '@deepseek-ai/dsh-nilm-tools'
+
+    - id: nilm-service
+      name: '@deepseek-ai/dsh-nilm-service'
+      config:
+        host: !!js process.env.NILM_SERVICE_HOST ?? '0.0.0.0'
+        port: !!js Number(process.env.NILM_SERVICE_PORT ?? 8080)
+        sessionCwd: !!js process.env.NILM_SESSION_CWD ?? process.cwd()
+        provider: !!js process.env.NILM_MODEL_PROVIDER ?? 'deepseek-official'
+        model: !!js process.env.NILM_MODEL ?? 'deepseek-chat'
+        reasoningModel: !!js process.env.NILM_REASONING_MODEL ?? 'deepseek-reasoner'
+        signingSecrets: !!js JSON.parse(process.env.NILM_SIGNING_SECRETS ?? '{}')
+
+    # Runs last: the registered tool surface may contain only nilm_* tools.
+    # Any shell, file, web, MCP, or subagent
+    # tool fails process startup.
+    - id: nilm-tool-guard
+      name: '@deepseek-ai/dsh-nilm-app'

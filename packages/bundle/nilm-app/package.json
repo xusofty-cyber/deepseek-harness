@@ -1,0 +1,66 @@
+{
+  "name": "@deepseek-ai/dsh-nilm-app",
+  "description": "Standalone NILM agent bundle: minimal Cordis kernel, read-only source adapters, and no shell, filesystem, web, MCP, or subagent tools",
+  "version": "0.2.2-rc.3",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "lib/types/**/*.d.ts",
+    "lib/types/**/*.d.ts.map",
+    "lib/**/*.js.map",
+    "src"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis-plugin-timer": "workspace:~",
+    "@deepseek-ai/dsh-agent": "workspace:*",
+    "@deepseek-ai/dsh-agent-loop": "workspace:*",
+    "@deepseek-ai/dsh-compaction-basic": "workspace:*",
+    "@deepseek-ai/dsh-llm": "workspace:*",
+    "@deepseek-ai/dsh-llm-deepseek-api-key": "workspace:*",
+    "@deepseek-ai/dsh-llm-retry": "workspace:*",
+    "@deepseek-ai/dsh-nilm-analytics": "workspace:*",
+    "@deepseek-ai/dsh-nilm-assets": "workspace:*",
+    "@deepseek-ai/dsh-nilm-context": "workspace:*",
+    "@deepseek-ai/dsh-nilm-core": "workspace:*",
+    "@deepseek-ai/dsh-nilm-prompt": "workspace:*",
+    "@deepseek-ai/dsh-nilm-safety": "workspace:*",
+    "@deepseek-ai/dsh-nilm-service": "workspace:*",
+    "@deepseek-ai/dsh-nilm-source": "workspace:*",
+    "@deepseek-ai/dsh-nilm-tariff": "workspace:*",
+    "@deepseek-ai/dsh-nilm-timeseries": "workspace:*",
+    "@deepseek-ai/dsh-nilm-tools": "workspace:*",
+    "@deepseek-ai/dsh-session": "workspace:*",
+    "@deepseek-ai/dsh-session-checkpoint-policy": "workspace:*",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "workspace:*",
+    "@deepseek-ai/dsh-session-projection": "workspace:*",
+    "@deepseek-ai/dsh-system-prompt": "workspace:*",
+    "@deepseek-ai/dsh-token-meter": "workspace:*",
+    "@deepseek-ai/dsh-tool-executor-native": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:~"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:~"
+  }
+}

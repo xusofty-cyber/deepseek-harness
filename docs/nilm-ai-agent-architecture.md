@@ -243,7 +243,7 @@ interface NilmDataQuality {
 | :--- | :--- | :--- |
 | `nilm_tariff_plan` | `tenant_id`, `plan_id`, `effective_from`, `effective_to`, `region`, `voltage_level` | 一个租户在同一时间只有一个生效计划 |
 | `nilm_tariff_period` | `plan_id`, `season`, `day_type`, `period_type`, `start_time`, `end_time`, `price` | `period_type` 为尖/峰/平/谷；支持一天多段 |
-| `nilm_calendar_day` | `tenant_id`, `date`, `day_type`, `shift_json` | 工作日、周末、节假日、生产班次 |
+| `nilm_calendar_day` | `tenant_id`, `date`, `day_type`, `season`, `shift_json` | 工作日、周末、节假日、电价季节与生产班次 |
 | `nilm_pf_policy` | `tenant_id`, `effective_from`, `threshold`, `reward_rule`, `penalty_rule` | 默认 0.90，但公式与阈值按当地规则配置 |
 
 力调风险计算：
@@ -368,7 +368,7 @@ interface NilmDataQuality {
 | :--- | :--- | :--- |
 | 范围解析与澄清 | `nilm_scope_resolve` | 本项目租户/`allowed_scope`/资产投影；名称匹配；候选不超过 5 个 |
 | 能耗与电费 | `nilm_energy_query` | `nilm-analytics` + `nilm-tariff` + `nilm-source` |
-| 设备与空载 | `nilm_appliance_query` | 设备状态/识别数据适配 + 时长与浪费计算 |
+| 设备运行工况 | `nilm_appliance_query` | 设备状态/识别数据适配 + 运行/停止时长与估算电量；空载与浪费估算延期到后续阶段 |
 | 电能质量 | `nilm_power_quality_query` | 实时测量适配 + 能量加权 PF、谐波含有率 |
 | 安全隐患 | `nilm_safety_query` | 隐患数据适配 + 点位解析 + 分级 |
 | 在线时序分析与隐患研判 | `nilm_timeseries_analyze` | `nilm-analytics`（秒级边沿特征提取）+ Agent（特征库反推与因果诊断） |
@@ -902,7 +902,7 @@ Tool 是模型与领域服务之间唯一的业务入口。原则：
 | Tool | 用途 | 关键参数 | 主要输出 |
 | :--- | :--- | :--- | :--- |
 | `nilm_energy_query` | 电量、电费、峰平谷、趋势、同比环比 | `scope`、`timeRange`、`compare?`、`includeCost?` | 总量、分时电量、费用、趋势、质量、`ChartSpec` |
-| `nilm_appliance_query` | 设备启停、运行时长、空载、浪费 | `scope`、`timeRange`、`applianceCategory?`、`idleThreshold?` | 设备列表、时长、估算电量/金额、残差、质量 |
+| `nilm_appliance_query` | 设备启停与运行/停止时长 | `scope`、`timeRange`、`applianceCategory?` | 设备列表、运行/停止/未知时长、估算电量、通道残差、质量 |
 | `nilm_power_quality_query` | 功率因数、谐波、电压偏差、三相不平衡 | `scope`、`timeRange`、`metrics?` | 能量加权 PF、极值、谐波含有率、风险、`ChartSpec` |
 | `nilm_safety_query` | 隐患检索与详情 | `scope`、`timeRange`、`types?`、`severity?` | 事件列表、点位、越限值、处置建议所需事实 |
 | `nilm_timeseries_analyze` | 秒级时序算法特征分析、电器反推与潜在微观隐患研判 | `scope`、`timeRange`（短窗口<=4h）、`metrics?`、`analysisMode` | 突变事件特征集、推断电器候选（功率/谐波拟合）、微观异常波动、`ChartSpec` |
@@ -1285,6 +1285,8 @@ function idleWasteKWh(
   return pricePerKWh > 0 ? { kwh, costYuan: kwh * pricePerKWh } : { kwh }
 }
 ```
+
+空载判定与浪费金额属于 `nilm-analytics` 的纯计算能力，但阶段 1 的上游只稳定提供设备运行/停止状态，缺少品类空载功率基线与阈值配置。因此阶段 1 的 `nilm_appliance_query` 只交付运行/停止/未知时长、估算电量与通道残差，不推断空载或金额；空载与浪费在后续阶段具备阈值配置后再接入。
 
 所有计算函数以纯函数形式放在 `nilm-analytics`，不读时钟、不读环境变量、不访问数据库；时间、阈值、电价作为参数传入，便于 100% 覆盖与边界测试。
 

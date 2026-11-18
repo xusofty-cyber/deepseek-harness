@@ -126,7 +126,7 @@ flowchart LR
 6. **BFF 网关与基座提示词装配（L4/L5 包）**：
    - 创建 `packages/nilm/prompt/`：装配跨租户通用的稳定基座提示词（严禁伪造数据、无数据不补零、口径标注说明）；
    - 创建 `packages/nilm/service/`：
-     - 实现 `POST /v1/turns`：生产优先 mTLS；非 mTLS 场景校验 `X-Nilm-Tenant-Id`、`X-Nilm-User-Ref`、`X-Nilm-Request-Id`、`X-Nilm-Timestamp`、`X-Nilm-Nonce`、`X-Nilm-Allowed-Scope` 与 `X-Nilm-Signature`；签名覆盖 method、path、query、body 摘要与上述 Header；Timestamp 允许 ±300 秒，Nonce 在 Redis 保存 10 分钟防重放；验签密钥或 CA 由 K8s Secret 注入并按调用方轮换；`Allowed-Scope` 缺省视为租户级并审计；验签后由 BFF 绑定不可变 `CallContext`，请求体中的 `tenant_id` 一律忽略并记录安全事件；返回 `202 Accepted` + `{ turnId, sessionId, streamUrl }`；
+     - 实现 `POST /v1/turns`：生产优先 mTLS；非 mTLS 场景校验 `X-Nilm-Tenant-Id`、`X-Nilm-User-Ref`、`X-Nilm-Request-Id`、`X-Nilm-Timestamp`、`X-Nilm-Nonce`、`X-Nilm-Allowed-Scope` 与 `X-Nilm-Signature`；签名覆盖 method、path、body 摘要与上述 Header；阶段 1 端点不使用 query，带 query 的请求直接拒绝；Timestamp 允许 ±300 秒，Nonce 默认保存 10 分钟防重放，阶段 1 代码使用进程内缓存，多副本上线前替换为 Redis；验签密钥或 CA 由 K8s Secret 注入并按调用方轮换；`Allowed-Scope` 缺省视为租户级并审计；验签后由 BFF 绑定不可变 `CallContext`，请求体中的 `tenant_id` 一律忽略并记录安全事件；返回 `202 Accepted` + `{ turnId, sessionId, streamUrl }`；
      - 实现 `GET /v1/turns/{turnId}/stream`：SSE 推送 `status`、`text.delta`、`text.done`、`tool.start`、`tool.result`、`chart`、`alert`、`clarify`、`error`、`done`、`ping`；每个事件带 turn 内单调 `id`，支持 `Last-Event-ID` 断线重放；`done` 后关闭连接；
      - 实现 `POST /v1/turns/{turnId}/cancel`、`POST /v1/conversations`、`GET /v1/conversations`、`GET /v1/conversations/{id}/messages`、`GET /v1/alerts`、`POST /v1/alerts/{id}/ack`；告警端点阶段 1 先交付只读骨架，阶段 3 接入 Sentinel 数据；
      - 阶段 1 交付 BFF 后补充 `/healthz` 与就绪检查。
@@ -148,8 +148,14 @@ flowchart LR
 | :--- | :--- | :--- |
 | **G1-1: 纯函数计算引擎 100% 单测** | 执行 `pnpm --filter @deepseek-ai/dsh-nilm-analytics test`，并用根仓 `pnpm run test:coverage` 的 per-file 100% 门禁校验 `packages/nilm/analytics/src` | `analytics/src/*.ts` 单测覆盖率达到 **100%**（分支、行、函数全覆盖）；分时切片、跨日断档、负增量清零等边界用例全部断言通过 |
 | **G1-2: 多通道拓扑展开与防重聚合** | 执行拓扑展开测试 `pnpm --filter @deepseek-ai/dsh-nilm-assets test` | 输入指定车间 ID，正确展开全部监测终端与通道；总进线（`terminal_total`）与下属分路（`branch`）互斥，严禁单点双算；父子偏差超过租户配置阈值（默认 1%）时输出 `aggregationWarning`，不静默相加；阈值从 `nilm_tenant_config` 读取，不在代码中写死 |
-| **G1-3: 双租户越权与签名闭环测试** | 启动集成测试，覆盖：A 租户合法签名查询 B 租户资产；过期 Timestamp；重复 Nonce；缺失/错误 Signature；请求体伪造 `tenant_id` | 跨租户返回 `403 Forbidden` (`SCOPE_FORBIDDEN`)；过期、重放、验签失败返回 `401` 且不创建 turn；请求体 `tenant_id` 被忽略，以 Header 绑定租户为准；每次拒绝写 `nilm_security_audit`；数据库未执行任何涉及 B 租户的 SQL |
+| **G1-3: 双租户越权与签名闭环测试** | 启动集成测试，覆盖：A 租户合法签名查询 B 租户资产；过期 Timestamp；重复 Nonce；缺失/错误 Signature；请求体伪造 `tenant_id` | 跨租户返回 `403 Forbidden` (`SCOPE_FORBIDDEN`)；过期、重放、验签失败返回 `401` 且不创建 turn；请求体 `tenant_id` 被忽略，以 Header 绑定租户为准；每次拒绝写安全审计（阶段 1 先写结构化日志，`nilm_security_audit` 随审计存储集成交付）；数据库未执行任何涉及 B 租户的 SQL |
 | **G1-4: 黄金问答集 Session 回放** | 执行无 Key 回放测试 `pnpm test:snapshot -t nilm-golden-qa-p1` | 黄金问答集范围内，回答中的所有电量、金额与 Tool 返回事实一致；无数据时明确说无数据，无模型估算或补零；图表为合法 `ChartSpec v1`；新增问题需扩充 `snapshots/session/nilm-golden-qa-p1/` 后再验收 |
+
+### 3.4 阶段 1 实现状态与部署前置
+
+已完成：五级拓扑与互不重叠计量点选择、热/统计/冷路由与降采样、分时电价与电费、设备运行/停止时长与估算电量、安全隐患投影、4 个 `nilm_*` Tool、稳定基座提示词、BFF REST/SSE、HMAC 验签、时间戳/nonce 校验、`allowed_scope`、会话三元组归属、`clientMessageId` 幂等、`Last-Event-ID` 重放、取消与健康检查。
+
+以下为明确的部署前置，不伪装成已交付：mTLS 仅完成协议设计，代码只接受 HMAC；nonce、会话元数据、幂等映射与本轮缓冲是进程内状态，多副本前需 Redis 与 `nilm_conversation` 持久化；`nilm_security_audit` 尚写日志；告警端点为空骨架；黄金问答 Session 快照需在具备真实数据源与模型录制的环境生成。阶段 1 `nilm_appliance_query` 只返回上游稳定的运行/停止状态与估算电量，不推断空载或浪费金额。
 
 ---
 

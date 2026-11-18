@@ -22,9 +22,9 @@ describe('shipped MCP resource composition', () => {
         profile.patches,
       ], message => warnings.push(message))
 
-      expect(rows.filter(row => row.name === resourcePackage)).toEqual([
-        { id: 'mcp-resources', name: resourcePackage },
-      ])
+      expect(rows.filter(row => row.name === resourcePackage)).toEqual(name === 'nilm'
+        ? []
+        : [{ id: 'mcp-resources', name: resourcePackage }])
       expect(rows.filter(row => row.name === '@deepseek-ai/dsh-mcp-client')).toEqual([])
       expect(warnings).toEqual([])
 
@@ -34,9 +34,9 @@ describe('shipped MCP resource composition', () => {
         }
         return manifest.dependencies?.[resourcePackage] !== undefined
       })
-      expect(owners.map(owner => owner.packageName)).toEqual([
-        name === 'sdk-minimal' ? '@deepseek-ai/dsh-sdk-minimal' : '@deepseek-ai/dsh-base',
-      ])
+      expect(owners.map(owner => owner.packageName)).toEqual(name === 'sdk-minimal'
+        ? ['@deepseek-ai/dsh-sdk-minimal']
+        : name === 'nilm' ? [] : ['@deepseek-ai/dsh-base'])
     } finally {
       rmSync(home, { recursive: true, force: true })
     }

@@ -8,6 +8,10 @@
     "docs/cordis-api/inherited.md",
     "docs/i18n/style-samples.md",
     "docs/i18n/terminology.md",
-    "docs/i18n/translation-prompt.md"
+    "docs/i18n/translation-prompt.md",
+    "docs/nilm-ai-agent-architecture.md",
+    "docs/nilm-ai-agent-development-plan.md",
+    "docs/nilm-ai-agent-high-level-design.md",
+    "docs/nilm-ai-agent-requirements.md"
   ]
 }

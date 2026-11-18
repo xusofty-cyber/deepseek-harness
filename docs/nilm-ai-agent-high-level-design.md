@@ -374,8 +374,10 @@ CREATE TABLE `nilm_notification_outbox` (
 | `nilm_report` | `report_id`、`tenant_id`、`report_type`、`report_date`、`payload_json`、`chart_json`、`summary_text`、`status`、`generated_at`、`delivered_at` | 唯一键 `(tenant_id, report_type, report_date)` |
 | `nilm_tariff_plan` | `plan_id`、`tenant_id`、`effective_from`、`effective_to`、`region`、`voltage_level`、`version` | 唯一键 `(tenant_id, plan_id)`；同一租户同一时间只有一个生效计划 |
 | `nilm_tariff_period` | `plan_id`、`season`、`day_type`、`period_type`、`start_time`、`end_time`、`price` | 唯一键 `(plan_id, season, day_type, period_type, start_time)`；`period_type` 为尖/峰/平/谷；支持一天多段 |
-| `nilm_calendar_day` | `tenant_id`、`date`、`day_type`、`shift_json` | 唯一键 `(tenant_id, date)`；工作日、周末、节假日、生产班次 |
+| `nilm_calendar_day` | `tenant_id`、`date`、`day_type`、`season`、`shift_json` | 唯一键 `(tenant_id, date)`；工作日、周末、节假日、电价季节与生产班次 |
 | `nilm_pf_policy` | `tenant_id`、`effective_from`、`threshold`、`reward_rule_json`、`penalty_rule_json` | 唯一键 `(tenant_id, effective_from)`；默认 0.90 只是初始值；没有可执行公式时只输出风险等级 |
+
+上表只列业务字段。建表脚本为支撑表补充两类技术列：`id`（自增主键，用于稳定行定位）与 `created_at`（记录写入时间，用于保留期清理与时间索引）。技术列不进入对外契约，也不新增业务语义；业务字段以本表为准。
 
 ### 2.4 隐私、保留与一致性
 
@@ -420,13 +422,33 @@ export interface MeterPoint {
   channelId: ChannelId
   role: MeterRole
   parentChannelId?: ChannelId
+  /** 资产投影路径，用于日/月统计库按 group_name 取数。 */
+  pathName?: string
 }
 
 export interface ScopeResolution {
   matched: ScopeTarget[]
   ambiguous: boolean
   resolvedPath?: string
+  /** 确定性拓扑或绑定告警；不静默丢弃被排除的分路。 */
+  warnings?: string[]
   meterSet: MeterPoint[]
+}
+
+export interface TelemetryPoint {
+  /** epoch 毫秒；不同上游精度在适配层统一。 */
+  tsMs: number
+  deviceId: string
+  channelId?: ChannelId
+  metric: string
+  value: number
+}
+
+export interface EnergyBucket {
+  /** 左闭右开 epoch 毫秒区间。 */
+  startMs: number
+  endMs: number
+  energyKwh: number
 }
 
 /** BFF 验签后绑定的不可变调用方上下文；Tool 参数中不存在这些字段。 */
@@ -587,9 +609,24 @@ export interface NilmContextService {
 
 ```ts
 export interface NilmAssetsService {
-  resolveScope(callContext: CallContext, query: ScopeTarget): Promise<ScopeResolution>
-  getWorkshopChannels(callContext: CallContext, workshopId: WorkshopId): Promise<MeterPoint[]>
-  resolveMeterSet(callContext: CallContext, scope: ScopeTarget): Promise<MeterPoint[]>
+  resolveScope(callContext: CallContext, query: ScopeTarget, signal?: AbortSignal): Promise<ScopeResolution>
+  getWorkshopChannels(callContext: CallContext, workshopId: WorkshopId, signal?: AbortSignal): Promise<MeterPoint[]>
+  resolveMeterSet(callContext: CallContext, scope: ScopeTarget, signal?: AbortSignal): Promise<MeterPoint[]>
+}
+
+export interface ApplianceStatePoint {
+  tsMs: number
+  terminalId: string
+  applianceNum: number
+  running: boolean
+  powerKw: number | null
+  currentA: number | null
+}
+
+export interface ApplianceQueryResult {
+  points: ApplianceStatePoint[]
+  dataQuality: NilmDataQuality
+  warnings: string[]
 }
 
 export interface NilmTimeseriesService {
@@ -597,31 +634,45 @@ export interface NilmTimeseriesService {
     callContext: CallContext,
     meterSet: readonly MeterPoint[],
     range: TimeRangeSpec,
-    metrics: readonly string[]
-  ): Promise<TelemetryPoint[]>
+    metrics: readonly string[],
+    signal?: AbortSignal
+  ): Promise<{ points: TelemetryPoint[]; dataQuality: NilmDataQuality; warnings: string[] }>
 
   queryAggregatedEnergy(
     callContext: CallContext,
     meterSet: readonly MeterPoint[],
     range: TimeRangeSpec,
-    granularity: TimeRangeSpec['granularity']
-  ): Promise<EnergyBucket[]>
-}
+    granularity: TimeRangeSpec['granularity'],
+    signal?: AbortSignal
+  ): Promise<{ buckets: EnergyBucket[]; dataQuality: NilmDataQuality; warnings: string[] }>
 
-export interface NilmSourceService {
-  /** 只读；SELECT-only 账号、白名单表/视图、参数绑定。 */
-  queryUnsafeRecords(callContext: CallContext, filter: UnsafeRecordFilter): Promise<UnsafeRecord[]>
-  /** 上游时序表无 tenant_id 时，先用租户资产白名单限定 device_id/association_asset。 */
-  queryTelemetry(
+  /** 按授权的终端 device_id 读取 NILM 设备识别状态；只按 app_num 过滤。 */
+  queryApplianceStates(
     callContext: CallContext,
     meterSet: readonly MeterPoint[],
     range: TimeRangeSpec,
-    metrics: readonly string[]
-  ): Promise<TelemetryPoint[]>
+    applianceNum?: number,
+    signal?: AbortSignal
+  ): Promise<ApplianceQueryResult>
+}
+
+export interface NilmSourceService {
+  queryLocalReadOnly<T>(sql: string, params?: readonly unknown[], signal?: AbortSignal): Promise<T[]>
+  queryUpstreamReadOnly<T>(sql: string, params?: readonly unknown[], signal?: AbortSignal): Promise<T[]>
+  listLocalTables(signal?: AbortSignal): Promise<string[]>
+  /** 内部生成的 TDengine 查询；只供领域适配器调用，不进入 Tool 参数。 */
+  queryHot<T>(sql: string, signal?: AbortSignal): Promise<T[]>
+  queryStats<T>(sql: string, signal?: AbortSignal): Promise<T[]>
+  /** 固定模板冷查询；不接受任意 SQL。 */
+  queryCold(template: string, params: Record<string, string | number | boolean | null>, signal?: AbortSignal): Promise<unknown>
+  probe(signal?: AbortSignal): Promise<ConnectivityReport>
+  close(): Promise<void>
 }
 ```
 
-热库保留最近 90 天；超过 90 天的日/月聚合走冷代理，秒级原始点也走冷代理且超时 5 秒。冷代理只接受“已授权租户 + 受控查询模板 + 有限时间窗”，不接受任意 SQL。
+热库保留最近 90 天；范围起点超过 90 天的日/月聚合走冷代理，秒级原始点也走冷代理且超时 5 秒。冷代理只接受“已授权租户 + 受控查询模板 + 有限时间窗”，不接受任意 SQL。实时查询同时读取原始表与三相汇总表，重复 `(metric, timestamp)` 以汇总行为准；原始点上限默认 2000、图表序列上限默认 500，均由服务层降采样。日/月聚合在具备投影路径时优先读取统计库，否则回退原始累计电量差分；负增量按表计复位处理并写入 `warnings`，不计入电量。
+
+设备工况查询读取热库 `nilmdc_appliance_identification`，先按已授权 `meterSet` 的 `terminalId` 去重，再用 `device_id IN (...)` 限定 SQL；上游该表只有终端 `device_id`，没有通道关联列，因此结果按终端与 `appliance_num` 分组。`appliance_state` 只区分运行（1）与停止（0），没有空载列；`nilm-analytics` 只累计运行/停止时长，未确认状态留为 `unknownMinutes`，不以空载代替。设备电量由运行样本的 `realtime_power` 在相邻可信区间积分得到，属于估算。
 
 `resolveMeterSet` 优先从上游通道数据推导计量角色；上游无法表达 `terminal_total`/`branch` 父子关系时，才读 `nilm_measurement_binding`。选择互不重叠的叶子计量点：有 `terminal_total` 时只取总进线，不再加其分路；没有总进线时才汇总 `branch`。`appliance` 只用于设备级分析，不参与电费结算聚合；`reference` 只做交叉校验。聚合前若父子偏差超过阈值，返回 `aggregationWarning`，不静默相加。
 
@@ -665,19 +716,22 @@ export interface TimeseriesAnalyzeInput {
 }
 
 export interface NilmAnalyticsService {
-  queryEnergy(callContext: CallContext, input: EnergyQueryInput): Promise<NilmToolResult<EnergyFacts>>
-  queryAppliances(callContext: CallContext, input: ApplianceQueryInput): Promise<NilmToolResult<ApplianceFacts>>
-  queryPowerQuality(callContext: CallContext, input: PowerQualityQueryInput): Promise<NilmToolResult<PowerQualityFacts>>
-  analyzeTimeseries(callContext: CallContext, input: TimeseriesAnalyzeInput): Promise<NilmToolResult<TimeseriesFacts>>
-
-  /** 以下为纯函数；输入已授权、已取数，不接收 CallContext。 */
+  /** 以下为阶段 1 已实现的纯函数；输入已授权、已取数，不接收 CallContext。 */
   calculateEnergyCosts(buckets: readonly EnergyBucket[], slices: readonly TariffSlice[], plan: TariffPlan): CostBreakdown
-  calculatePowerFactor(totalActiveKwh: number, totalReactiveKvarh: number): number | undefined
   calculateRunningAndIdleTime(
     transitions: readonly Array<{ ts: number; isRunning: boolean; isIdle: boolean }>,
     window: { start: number; end: number },
     minDwellMs: number
-  ): { runningMinutes: number; idleMinutes: number; validRatio: number }
+  ): RunningIdleResult
+  calculateCompareTrends(current: PeriodMetric, baseline: PeriodMetric): CompareTrend
+  summarizeApplianceStates(
+    points: readonly ApplianceStateSample[],
+    window: { startMs: number; endMs: number },
+    maxGapMs?: number
+  ): ApplianceUsage[]
+
+  /** 阶段 2 增加：PF、谐波与秒级特征纯函数。 */
+  calculatePowerFactor(totalActiveKwh: number, totalReactiveKvarh: number): number | undefined
   detectTimeSeriesFeatures(
     points: readonly TelemetryPoint[],
     options: { powerThresholdKw: number; windowSizeSec: number }
@@ -685,13 +739,13 @@ export interface NilmAnalyticsService {
 }
 
 export interface NilmTariffService {
-  effectivePlan(callContext: CallContext, at: Date): Promise<TariffPlan>
-  splitByTariff(callContext: CallContext, range: TimeRangeSpec, planId?: string): Promise<TariffSlice[]>
-  powerFactorPolicy(callContext: CallContext, at: Date): Promise<PowerFactorPolicy>
+  effectivePlan(callContext: CallContext, atMs?: number, signal?: AbortSignal): Promise<TariffPlan>
+  splitByTariff(callContext: CallContext, range: TimeRangeSpec, planId?: string, signal?: AbortSignal): Promise<TariffSegmentation>
+  powerFactorPolicy(callContext: CallContext, atMs: number, signal?: AbortSignal): Promise<PowerFactorPolicy>
 }
 
 export interface NilmSafetyService {
-  queryUnsafeRecords(callContext: CallContext, input: SafetyQueryInput): Promise<NilmToolResult<SafetyFacts>>
+  queryUnsafeRecords(callContext: CallContext, input: SafetyQueryInput, signal?: AbortSignal): Promise<SafetyQueryResult>
   evaluateMicroscopicHazards(
     callContext: CallContext,
     events: readonly TimeSeriesEdgeEvent[]
@@ -733,20 +787,22 @@ Tool 是模型与业务数据之间的唯一入口。Tool 参数不包含 `tenan
 
 | Tool | 用途 | 关键参数 | 调用服务 | 主要输出 |
 | :--- | :--- | :--- | :--- | :--- |
-| `nilm_scope_resolve` | 名称/路径解析与歧义澄清 | `query`、`level?` | `ctx.nilmAssets.resolveScope` | 候选 Scope、匹配理由、歧义标记 |
-| `nilm_energy_query` | 电量、电费、峰平谷、趋势、同比环比 | `scope`、`timeRange`、`compare?`、`includeCost?` | `ctx.nilmAnalytics.queryEnergy` | 总量、分时电量、费用、趋势、质量、`ChartSpec` |
-| `nilm_appliance_query` | 设备启停、运行时长、空载、浪费 | `scope`、`timeRange`、`applianceCategory?` | `ctx.nilmAnalytics.queryAppliances` | 设备列表、时长、估算电量/金额、残差、质量 |
+| `nilm_scope_resolve` | 名称/路径解析与歧义澄清 | `level`、`id?`、`name?`、`path?` | `ctx.nilmAssets.resolveScope` | 至多 5 个候选、互不重叠计量点、歧义标记 |
+| `nilm_energy_query` | 电量、电费、峰平谷、趋势、同比环比 | `scope`、`start`、`end`、`granularity`、`compare?`、`include_cost?` | `ctx.nilmAssets` + `ctx.nilmTimeseries` + `ctx.nilmTariff` + `ctx.nilmAnalytics` | 总量、分时电量、费用、趋势、质量、`ChartSpec` |
+| `nilm_appliance_query` | 设备启停、运行/停止时长、估算电量与残差 | `scope`、`start`、`end`、`applianceCategory?` | `ctx.nilmTimeseries.queryApplianceStates` + `ctx.nilmAnalytics.summarizeApplianceStates` | 设备列表、时长、估算电量/金额、残差、质量 |
 | `nilm_power_quality_query` | 功率因数、2~7 次谐波、电压偏差、三相不平衡 | `scope`、`timeRange`、`metrics?` | `ctx.nilmAnalytics.queryPowerQuality` | 能量加权 PF、极值、谐波含有率、风险、`ChartSpec` |
-| `nilm_safety_query` | 隐患检索与详情 | `scope`、`timeRange`、`types?`、`severity?` | `ctx.nilmSafety.queryUnsafeRecords` | 事件列表、点位、越限值、处置事实 |
+| `nilm_safety_query` | 隐患检索与详情 | `scope`、`start`、`end`、`severity?`、`limit?` | `ctx.nilmSafety.queryUnsafeRecords` | 事件列表、点位、越限值、处置事实 |
 | `nilm_timeseries_analyze` | 秒级特征、电器反推、微观隐患 | `scope`、`timeRange`（<=4h）、`analysisMode` | `ctx.nilmAnalytics.analyzeTimeseries` | 突变事件、电器候选及置信度依据、潜在隐患、`ChartSpec` |
 
-`nilm_appliance_query` 不暴露 `idleThreshold`；空载阈值由租户/设备品类配置控制，模型只能选择范围、时间与品类，避免用参数把“浪费”算小或算大。
+`nilm_appliance_query` 不暴露 `idleThreshold`；空载阈值由租户/设备品类配置控制，模型只能选择范围、时间与品类，避免用参数把“浪费”算小或算大。阶段 1 上游没有空载状态列，因此该 Tool 只返回运行、停止与未知时长，并明确说明未推断空载。
 
 `nilm_scope_resolve` 最多返回 5 个候选；超过 5 个时要求用户补充车间、终端或路径条件，不把长列表塞进模型上下文。
 
 `nilm_timeseries_analyze` 的每个电器候选至少包含 `candidate`、`confidence`、`evidence`（ΔP/ΔQ、冲击比、持续时间、2~7 次谐波增量）与 `residualRatio`；没有足够特征时只给候选与缺失说明，不强行下结论。
 
 `nilm_safety_query` 的事实至少包含 `occurredAt`、`sitePath`、`terminal`、`channel`、`phase`、`unsafeType`、`severity`、`powerKw`、`currentA`、`applianceName`、`threshold`、`durationSeconds`、`status`；上游缺失字段返回 `null` 并说明，不用 0 填充。
+
+Tool 结果必须显式区分“没有数据”与数值 0：电量无桶时返回 `dataAvailable: false` 和 `totalEnergyKwh: null`；无设备识别样本时返回空列表与告警；安全查询无匹配时返回 `totalMatched: 0`。模型事实中的电量序列最多 200 桶、设备行最多 20 条、安全记录最多 20 条，截断必须写入 `warnings`，但总电量等汇总值仍使用完整结果。
 
 ### 5.1 执行约束
 
@@ -863,7 +919,7 @@ export function registerTimeseriesAnalyzeTool(ctx: Context): void {
 
 ### 6.1 调用方上下文与签名
 
-生产优先使用 mTLS。非 mTLS 场景使用 HMAC-SHA256 签名信封，签名覆盖请求方法、路径、请求体摘要与全部上下文头：
+生产优先使用 mTLS。非 mTLS 场景使用 HMAC-SHA256 签名信封，签名覆盖请求方法、路径、请求体摘要与全部上下文头。阶段 1 的所有端点都不使用查询参数；BFF 直接拒绝带 query 的请求，避免出现未进入签名却影响结果的参数：
 
 | 请求头 | 必填 | 说明 |
 | :--- | :--- | :--- |
@@ -891,14 +947,14 @@ canonical = METHOD + "\n" + PATH + "\n" + lowerhex(sha256(body)) + "\n" +
 
 | 方法 | 路径 | 作用 | 返回 |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/v1/turns` | 提交消息，创建或恢复会话 | `202 Accepted`，`{ turnId, sessionId, streamUrl }` |
+| `POST` | `/v1/turns` | 提交消息，创建或恢复会话 | `202 Accepted`，`{ turnId, sessionId, conversationId, streamUrl, idempotent }` |
 | `GET` | `/v1/turns/{turnId}/stream` | SSE 流；支持 `Last-Event-ID` 续传 | `text/event-stream` |
 | `POST` | `/v1/turns/{turnId}/cancel` | 取消当前生成 | `204 No Content` |
 | `POST` | `/v1/conversations` | 新开会话；服务端签发 `conversationId` | `201 Created` |
 | `GET` | `/v1/conversations` | 当前用户会话列表与最近摘要 | `200 OK` |
 | `GET` | `/v1/conversations/{id}/messages` | 历史消息分页 | `200 OK` |
-| `GET` | `/v1/alerts` | 告警列表与详情 | `200 OK` |
-| `POST` | `/v1/alerts/{id}/ack` | 确认/忽略告警；写审计，不控制设备 | `200 OK` |
+| `GET` | `/v1/alerts` | 告警列表与详情；阶段 1 返回空且不可用的骨架 | `200 OK` |
+| `POST` | `/v1/alerts/{id}/ack` | 确认/忽略告警；写审计，不控制设备；阶段 1 返回 `DATA_UNAVAILABLE` | `503` |
 | `GET` | `/healthz`、`/readyz` | 存活与就绪 | `200/503` |
 
 所有资源读取都必须按 `tenant_id + user_ref` 过滤；`turnId`、`conversationId`、`alertId` 只是资源标识，不是授权凭证。跨用户或跨租户访问返回 `SCOPE_FORBIDDEN`，不泄露资源是否存在。
@@ -964,6 +1020,16 @@ SSE 规则：
 - 每个 turn 最大 60 秒；超时发送 `error` + `done` 并取消 Agent。
 - 客户端断开不取消 Agent，除非显式 `cancel`；结果继续写入 Session，用户回来可恢复。
 - `error.message` 面向用户；内部原因、SQL、表名、堆栈写审计，不进入事件。
+
+### 6.4 阶段 1 实现状态
+
+阶段 1 的 `nilm-service` 已实现上表的 REST/SSE 路由、`/healthz`、`/readyz`、HMAC 验签、时间戳窗口、nonce 防重放、`allowed_scope` 解析、会话三元组归属校验、`clientMessageId` 幂等、SSE 单调 id 与 `Last-Event-ID` 重放。以下能力仍是有意的阶段边界，部署前必须知悉：
+
+- **mTLS 未实现**：阶段 1 只接受 HMAC 信封；生产接入前补齐 mTLS 或由网关提供等价的双向认证。
+- **nonce 为单进程内存**：多副本部署时各副本的 nonce 缓存不共享，必须替换为 Redis 才能满足全局防重放。
+- **会话元数据为单进程内存**：`nilm_conversation` 尚未接入；重启后丢失会话列表与 `session_id -> shard_id` 映射。单副本阶段可用，扩容前必须持久化。
+- **审计未落库**：安全审计当前写结构化日志；`nilm_security_audit` 表写入随审计存储集成交付。
+- **告警为空骨架**：`GET /v1/alerts` 明确返回 `available: false`，确认接口返回 `DATA_UNAVAILABLE`，不伪造告警数据。
 
 ---
 

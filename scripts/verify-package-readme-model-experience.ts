@@ -42,6 +42,16 @@ const NO_MODEL_EXPERIENCE_SECTION: Readonly<Record<string, string>> = {
   'packages/util/values': 'The package only validates, snapshots, compares, freezes, or rejects caller-owned values; consumers own every model-facing use.',
   'packages/util/official-bundles': 'The package only lists bundle package names and their display metadata; the loaded plugin tree owns model context.',
   'packages/util/code-language': 'The package only maps a filename suffix to a syntax-highlighting language id; the read consumer owns the persisted hint.',
+  'packages/nilm/core': 'The package defines identifiers, error codes, and chart structures; model-facing consumers own every rendered use.',
+  'packages/nilm/context': 'The package binds caller context in process memory; the BFF and model-facing tools own tool input and output.',
+  'packages/nilm/source': 'The package only executes guarded reads against configured sources; model-facing services own summaries and result rendering.',
+  'packages/nilm/assets': 'The package resolves authorized topology and meter sets; model-facing tools and the BFF own summaries, clarification, and result rendering.',
+  'packages/nilm/safety': 'The package only projects stored unsafe records for authorized callers; model-facing tools own diagnosis, summaries, and result rendering.',
+  'packages/nilm/timeseries': 'The package only routes and bounds already authorized timeseries reads; model-facing tools own summaries, charts, and result rendering.',
+  'packages/nilm/tariff': 'The package only validates plans and splits ranges into priced slices; model-facing tools and the BFF own summaries, authorization, and result rendering.',
+  'packages/nilm/analytics': 'The package only performs deterministic calculations over caller-supplied values; model-facing consumers own authorization, summaries, and result rendering.',
+  'packages/nilm/service': 'The BFF verifies callers and transports turns; the mounted prompt and tool plugins own every model-visible contribution.',
+  'packages/bundle/nilm-app': 'The package is a static Cordis composition and startup guard; mounted plugins own model context.',
 }
 
 /**

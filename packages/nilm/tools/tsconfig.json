@@ -1,0 +1,22 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    { "path": "../analytics" },
+    { "path": "../assets" },
+    { "path": "../context" },
+    { "path": "../core" },
+    { "path": "../safety" },
+    { "path": "../tariff" },
+    { "path": "../timeseries" },
+    { "path": "../../core/tools" },
+    { "path": "../../util/values" },
+    { "path": "../../../vendor/schemastery" }
+  ]
+}

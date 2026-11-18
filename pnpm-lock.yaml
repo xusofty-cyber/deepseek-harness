@@ -429,6 +429,9 @@ importers:
       '@deepseek-ai/dsh-mcp-resources':
         specifier: workspace:*
         version: link:../../packages/mcp/mcp-resources
+      '@deepseek-ai/dsh-nilm-app':
+        specifier: workspace:*
+        version: link:../../packages/bundle/nilm-app
       '@deepseek-ai/dsh-official-bundles':
         specifier: workspace:*
         version: link:../../packages/util/official-bundles
@@ -2834,6 +2837,91 @@ importers:
       '@deepseek-ai/dsh-user-approval':
         specifier: workspace:*
         version: link:../../interaction/user-approval
+
+  packages/bundle/nilm-app:
+    dependencies:
+      '@deepseek-ai/cordis-plugin-timer':
+        specifier: workspace:~
+        version: link:../../../vendor/timer
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:*
+        version: link:../../core/agent
+      '@deepseek-ai/dsh-agent-loop':
+        specifier: workspace:*
+        version: link:../../core/agent-loop
+      '@deepseek-ai/dsh-compaction-basic':
+        specifier: workspace:*
+        version: link:../../compaction/compaction-basic
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
+      '@deepseek-ai/dsh-llm-deepseek-api-key':
+        specifier: workspace:*
+        version: link:../../llm/llm-deepseek-api-key
+      '@deepseek-ai/dsh-llm-retry':
+        specifier: workspace:*
+        version: link:../../llm/llm-retry
+      '@deepseek-ai/dsh-nilm-analytics':
+        specifier: workspace:*
+        version: link:../../nilm/analytics
+      '@deepseek-ai/dsh-nilm-assets':
+        specifier: workspace:*
+        version: link:../../nilm/assets
+      '@deepseek-ai/dsh-nilm-context':
+        specifier: workspace:*
+        version: link:../../nilm/context
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../../nilm/core
+      '@deepseek-ai/dsh-nilm-prompt':
+        specifier: workspace:*
+        version: link:../../nilm/prompt
+      '@deepseek-ai/dsh-nilm-safety':
+        specifier: workspace:*
+        version: link:../../nilm/safety
+      '@deepseek-ai/dsh-nilm-source':
+        specifier: workspace:*
+        version: link:../../nilm/source
+      '@deepseek-ai/dsh-nilm-tariff':
+        specifier: workspace:*
+        version: link:../../nilm/tariff
+      '@deepseek-ai/dsh-nilm-timeseries':
+        specifier: workspace:*
+        version: link:../../nilm/timeseries
+      '@deepseek-ai/dsh-nilm-service':
+        specifier: workspace:*
+        version: link:../../nilm/service
+      '@deepseek-ai/dsh-nilm-tools':
+        specifier: workspace:*
+        version: link:../../nilm/tools
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:*
+        version: link:../../core/session
+      '@deepseek-ai/dsh-session-checkpoint-policy':
+        specifier: workspace:*
+        version: link:../../session/session-checkpoint-policy
+      '@deepseek-ai/dsh-session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../../session/session-persistence-jsonl
+      '@deepseek-ai/dsh-session-projection':
+        specifier: workspace:*
+        version: link:../../session/session-projection
+      '@deepseek-ai/dsh-system-prompt':
+        specifier: workspace:*
+        version: link:../../core/system-prompt
+      '@deepseek-ai/dsh-token-meter':
+        specifier: workspace:*
+        version: link:../../llm/token-meter
+      '@deepseek-ai/dsh-tool-executor-native':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-native
+      '@deepseek-ai/dsh-tools':
+        specifier: workspace:*
+        version: link:../../core/tools
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
 
   packages/bundle/sdk-app:
     dependencies:
@@ -14989,6 +15077,194 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: workspace:*
         version: link:../../core/tools
+
+  packages/nilm/analytics:
+    dependencies:
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-nilm-tariff':
+        specifier: workspace:*
+        version: link:../tariff
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/assets:
+    dependencies:
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-nilm-source':
+        specifier: workspace:*
+        version: link:../source
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/context:
+    dependencies:
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:*
+        version: link:../../util/brand
+
+  packages/nilm/core:
+    dependencies:
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:*
+        version: link:../../util/brand
+      '@deepseek-ai/dsh-error':
+        specifier: workspace:*
+        version: link:../../util/error
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/prompt:
+    dependencies:
+      '@deepseek-ai/dsh-system-prompt':
+        specifier: workspace:*
+        version: link:../../core/system-prompt
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/safety:
+    dependencies:
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-nilm-source':
+        specifier: workspace:*
+        version: link:../source
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/service:
+    dependencies:
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:*
+        version: link:../../core/agent
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:*
+        version: link:../../util/brand
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
+      '@deepseek-ai/dsh-nilm-context':
+        specifier: workspace:*
+        version: link:../context
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:*
+        version: link:../../core/session
+      '@deepseek-ai/dsh-session-persistence':
+        specifier: workspace:*
+        version: link:../../session/session-persistence
+      '@deepseek-ai/dsh-util-values':
+        specifier: workspace:*
+        version: link:../../util/values
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/source:
+    dependencies:
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/tariff:
+    dependencies:
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-nilm-source':
+        specifier: workspace:*
+        version: link:../source
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/timeseries:
+    dependencies:
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-nilm-source':
+        specifier: workspace:*
+        version: link:../source
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/tools:
+    dependencies:
+      '@deepseek-ai/dsh-nilm-analytics':
+        specifier: workspace:*
+        version: link:../analytics
+      '@deepseek-ai/dsh-nilm-assets':
+        specifier: workspace:*
+        version: link:../assets
+      '@deepseek-ai/dsh-nilm-context':
+        specifier: workspace:*
+        version: link:../context
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-nilm-safety':
+        specifier: workspace:*
+        version: link:../safety
+      '@deepseek-ai/dsh-nilm-tariff':
+        specifier: workspace:*
+        version: link:../tariff
+      '@deepseek-ai/dsh-nilm-timeseries':
+        specifier: workspace:*
+        version: link:../timeseries
+      '@deepseek-ai/dsh-tools':
+        specifier: workspace:*
+        version: link:../../core/tools
+      '@deepseek-ai/dsh-util-values':
+        specifier: workspace:*
+        version: link:../../util/values
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
 
   packages/plan/plan-mode:
     dependencies:
