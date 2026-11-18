@@ -23,6 +23,8 @@ export interface OutboxTask {
   userRef: string | null
   /** Connected alert event, when present. */
   eventId: string | null
+  /** Connected scheduled report, when present. */
+  reportId: string | null
   /** Delivery channel. */
   channel: NotificationChannel
   /** Provider template. */

@@ -785,7 +785,7 @@ dsh Session 持久化采用单写者所有权：同一 Session 不能被两个�
 
 - 完整树：从 `sdk-minimal` 的最小内核出发，删除 SDK stdio、shell、terminal、文件系统、附件、图像卸载、sandbox、subprocess 等行，加入 NILM 行；不继承 base，也不依赖 base 的行 id。
 - 只挂载完成问答所需的最小核心：Agent、Agent Loop、LLM、Session、Session 持久化、Checkpoint、Tools、System Prompt、Token Meter、Compaction、Timer、NILM 插件。
-- `nilm-agent` 服务额外挂载 HTTP/SSE 适配插件；`nilm-sentinel` 与 `nilm-scheduler` 不直接挂载模型与 Session，只挂载领域服务、规则引擎、任务编排与通知插件；需要文案时通过内网调用 `nilm-agent` 的专用接口。
+- `nilm-agent` 服务额外挂载 HTTP/SSE 适配插件；`nilm-sentinel` 不直接挂载模型与 Session，只挂载领域服务、规则引擎与通知插件。`nilm-scheduler` 默认只使用确定性模板；配置 `summaryModel` 时通过一次性 Cordis Agent 生成摘要文字，不改变报表数字或投递控制。
 - 生产 Profile 不注册 `tool-bash`、`tool-fs`、`tool-web`、`tool-subagent`、`tool-jobs`、`tool-skill`、MCP 客户端；工具清单由组合测试固定。
 - 不挂载 settings、credentials、plugin-manager、HMR、config-editor、session-telemetry-otel、session-log-deepseek、session-title-llm。模型 Key 由 K8s Secret/环境变量注入；会话标题由 `nilm_conversation.title` 维护。
 - 如果未来要接入 MCP server，必须同时挂载 `mcp-resources` 与 `mcp-client`，并在安全评审中新增数据出口说明；不得只挂客户端而漏掉共享资源 Tool。
@@ -860,7 +860,7 @@ base 的默认能力与本项目的处理：
 | `nilm-tools` | 注册 `nilm_*` Tool | Tool 参数/输出/错误/投影；不直接访问数据库 | `nilm-analytics` 等 |
 | `nilm-prompt` | 贡献 `ctx.systemPrompt` | 稳定基座提示词、数据质量规则、输出格式 | `dsh-system-prompt` |
 | `nilm-sentinel` | `ctx.nilmSentinel` | 规则定义、基线、窗口状态、告警事件、去重 | `nilm-timeseries`、`nilm-safety` |
-| `nilm-scheduler` | `ctx.nilmScheduler` | 定时任务、租约选主、幂等键、晨报与力调预测编排 | `nilm-analytics`、`nilm-notify` |
+| `nilm-scheduler` | `ctx.nilmScheduler` | 定时任务、数据库幂等领取、晨报与力调预测编排 | `nilm-analytics`、`nilm-notify`；配置 `summaryModel` 时使用一次性 Agent |
 | `nilm-notify` | `ctx.nilmNotify` | 通知 Outbox、渠道适配、重试、模板渲染、审计 | 本项目 MySQL、微信/短信 |
 | `nilm-service` | `ctx.nilmService` | BFF HTTP/SSE、上下文验签、会话编排、卡片投影、取消与幂等 | `dsh-agent`、`nilm-context`、`nilm-tools`、`nilm-notify` |
 | `nilm-app` | bundle（`packages/bundle/nilm-app/`） | `cordis.patch.yml` 与组合测试 | 上述包 |
@@ -1090,21 +1090,21 @@ Session 关系：
 
 ### 5.7 定时任务
 
-dsh `ctx.schedule` 适合“到点触发一次 Agent turn”，不适合秒级实时检测；其最小 `every` 间隔为 60 秒，且任务属于 Host、投递到指定 Session。因此定时任务必须明确承载进程，不能既说 scheduler 不挂 Session、又依赖它调度 Session。
+dsh `ctx.schedule` 适合“到点触发一次 Agent turn”，不适合秒级实时检测；其最小 `every` 间隔为 60 秒，且任务属于 Host、投递到指定 Session。因此定时任务必须明确承载进程；`nilm-scheduler` 的默认路径只做确定性计算，不依赖 `ctx.schedule`。
 
 两种模式，v1 只用第二种：
 
 | 模式 | 承载 | 适用 | 约束 |
 | :--- | :--- | :--- | :--- |
 | A. `ctx.schedule` | `nilm-agent` 进程（挂载 Host 与 Session） | scheduler 并入 agent、任务量很小 | 每租户一个报表会话；任务定义由配置生成；扩容后必须选主 |
-| B. 独立 `nilm-scheduler` | 独立 Deployment（不挂模型与 Session） | 默认方案 | 定时器 + 数据库租约；先做确定性计算，再调用 `nilm-agent` 报表接口生成摘要 |
+| B. 独立 `nilm-scheduler` | 独立 Deployment | 默认方案 | 定时器 + 数据库幂等键；默认使用模板摘要，配置 `summaryModel` 时创建一次性 Agent，不改变数字或投递 |
 
 任务清单：
 
-- 每日晨报：08:30（`Asia/Shanghai`）先由 `nilm-analytics` 生成结构化数据与图表，再由 `nilm-scheduler` 调用 `nilm-agent` 的报表接口生成摘要；检查 `tenant_id + date + report_type` 幂等键。
+- 每日晨报：08:30（`Asia/Shanghai`）先由 `nilm-analytics` 生成结构化数据与图表，再由 `nilm-scheduler` 生成确定性摘要或调用一次性 Agent 润色；检查 `(job_type, tenant_id, business_date)` 幂等键。
 - 月度力调预测：每月 20、25 日执行；先跑确定性计算，再让 Agent 生成解释；没有可执行公式时只输出风险等级。
-- 数据质量巡检：每日低峰期检查覆盖率、父子计量偏差、冷热库一致性；失败写运维告警，不发给客户。
-- 所有定时任务必须选主，避免多副本重复触发；任务执行结果写 `nilm_job_run` 审计表。
+- 数据质量巡检：每日低峰期检查覆盖率与父子计量偏差；冷热库一致性待冷电量路由就绪后启用。失败写运维审计，不发给客户。
+- 所有定时任务通过 `nilm_job_run` 唯一幂等键与租约避免同业务日重复执行；任务执行结果写审计表。
 
 实时巡检（夜间基载、越限速报）不走 `ctx.schedule`，而由 `nilm-sentinel` 的常驻循环或事件消费者执行，见第 8 节。
 
@@ -1588,7 +1588,10 @@ Agent 只做“解释与建议”，不决定是否告警：
 - `nilm-scheduler` 在 08:30 触发，先检查 `tenant_id + date + report_type` 幂等键。
 - 先由 `nilm-analytics` 生成结构化日报数据与图表；`nilm-scheduler` 调用 `nilm-agent` 的报表接口，由 Agent 只负责写摘要与建议。
 - 生成结果写 `nilm_report`，再入 Outbox 投递；失败重试不回退到“重新查一遍”。
+- 报告 Outbox 行携带 `report_id`；notifier 在供应商成功后回填 `nilm_report.delivered_at`，告警事件的 `notified` 流转仍只处理 `event_id`。
 - 用户也可在对话中查询“昨天的晨报”，Tool 读取已生成的报告，避免重复计算。
+
+当前实现按 `(job_type, tenant_id, business_date)` 幂等执行，R-07 报告描述昨日并以昨日为业务日期；R-06 在 20/25 日读取已完成的当月日汇总，按最近 7 个同星期中位数外推，缺失星期使用最近 7 日中位数；R-08 在低峰期写运维审计，不向客户投递。默认部署没有月度 `E_p`/`E_q` 预聚合，R-06 会显式失败；冷热一致性与对话查询晨报 Tool 仍属延期工作。
 
 ### 8.7 通知偏好与审计
 

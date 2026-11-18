@@ -1,55 +1,52 @@
 # Session: 2026-11-18
 
 **Started:** 2026-11-18 (Asia/Shanghai)
-**Last Updated:** 2026-11-18 16:38 CST
+**Last Updated:** 2026-11-18 17:25 CST
 **Project:** `/home/picohood/projects/opensource/deepseek-harness`
-**Topic:** NILM 独立 AI Agent 阶段 3：主动巡检、告警生命周期与可靠通知 Outbox
+**Topic:** NILM 阶段 4.1：`nilm-scheduler` 晨报、力调预测与 R-08 数据质量巡检
 
 ---
 
 ## What We Are Building
 
-本仓库是 dsh harness。当前项目是在其上构建一个独立的 NILM（非侵入式负荷监测）工厂能源 AI Agent 服务，作为服务提供商为微信小程序 / App 的调用方客户提供对话、能效分析、安全隐患检索和主动告警能力。
+在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务，为微信小程序 / App 调用方提供对话、能效分析、安全隐患检索与主动告警。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。
 
-本项目不实现登录、角色、权限后台或客户前端展示；调用方平台完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`。BFF 只验签并绑定不可变调用上下文。
-
-阶段 1/2 已完成电力拓扑、时序、电价、分析、电能质量、CUSUM、安全、提示词、六个 `nilm_*` 工具与 BFF。本次会话完成阶段 3：`nilm-sentinel` 巡检规则、告警状态机、抑制与升级、事务化 Outbox，以及 `nilm-notify` 可靠投递、四渠道网关契约和 8 秒异步研判。阶段 4（调度报告、R-06/R-07/R-08、现场证据门）尚未开始。
+阶段 1/2 已完成拓扑、时序、电价、分析、电能质量、CUSUM、安全、提示词、六个 `nilm_*` 工具与 BFF。阶段 3 已完成 `nilm-sentinel` 巡检规则、告警状态机、抑制升级、事务化 Outbox，以及 `nilm-notify` 可靠投递、四渠道网关契约和 8 秒异步研判。本会话进入阶段 4，完成 WBS 4.1 的 `nilm-scheduler` 离线实现；4.2 StatefulSet 恢复、4.3 百家工厂压测、4.4 安全渗透与全量验收尚未开始。
 
 ---
 
 ## What WORKED (with evidence)
 
-- **阶段 3 全部离线测试** — confirmed by: `30` 个测试文件、`234` 个用例全部通过（2026-11-18 16:30 CST）。覆盖 sentinel 状态机/规则/抑制/扫描器、notify 退避/并发领取/租约回收/渠道契约/富化超时、BFF 告警端点、DDL 18 表、bundle 组合。
-- **Sentinel 增量扫描与规则** — confirmed by: `packages/nilm/sentinel/tests/*.spec.ts`；水位线持久化、R-01a/R-01b/R-02/R-03/R-05、`silence_key` 抑制、连续 3 窗口升级穿透均有测试。
-- **Notify Outbox 调度** — confirmed by: 5 个 worker 并发领取 100 条无重复无丢失、过期租约可重领、永久失败立即 `dead`、退避表 `[1m,5m,15m,1h]`、第 5 次失败 `dead`。
-- **渠道网关契约** — confirmed by: HTTP 200/429/5xx/4xx 分类、载荷只含加密接收方与掩码、不含明文手机号。
-- **异步富化** — confirmed by: Agent 10 秒延迟注入、8 秒硬超时、迟到结果不写入、已确认告警不覆盖。
-- **BFF 告警端点** — confirmed by: `GET /v1/alerts` 挂载时返回 `available: true`，未挂载返回 `available: false`；`POST /v1/alerts/{id}/ack` 返回 `acknowledged` 并写审计事件；跨用户返回 `SCOPE_NOT_FOUND`。
-- **DDL 与包组合** — confirmed by: DDL 精确 18 表、`NILM_LOCAL_TABLES` 集合一致、`nilm-app` 测试断言 sentinel/notify 行存在且依赖齐全。
-- **文档门禁** — confirmed by: translation pairing `1312` 对一致；README limitations `396` 个通过；model experience `396` 个通过；doc refs `5232` 个可解析；doc budgets `7` 个在预算内。
-- **类型检查（NILM 范围）** — confirmed by: 临时 `noEmit` 配置下 `packages/nilm` 与 `packages/bundle/nilm-app` 零错误。
+- **阶段 4.1 调度器离线测试** — confirmed by: `packages/nilm/scheduler/tests` 8 个文件、41 个用例全部通过（2026-11-18 17:32 CST）。覆盖上海业务时间、PF 预测、质量检查、报告载荷、任务幂等、MySQL 仓储映射、默认数据采集器、配置校验与 20 租户 G4-1 演练。
+- **报告投递闭环** — confirmed by: `packages/nilm/notify/tests/store.spec.ts` 验证 Outbox 领取映射 `report_id`，并在供应商成功后回填 `nilm_report.delivered_at`；告警行与报告行互不干扰。
+- **G4-1 离线演练** — confirmed by: `packages/nilm/scheduler/tests/morning-report.spec.ts` 的 `twenty tenants` 用例通过；20 租户 30 天日数据、5 个计量点、单租户 p95 预算与重复触发不重复报告/投递均有断言。
+- **全部 NILM 测试** — confirmed by: 39 个测试文件、279 个用例全部通过（2026-11-18 17:32 CST），包含阶段 3 的 234 个基线用例与新增调度器/Notify 用例。
+- **调度器类型检查** — confirmed by: 临时 `noEmit` 配置下 `packages/nilm/scheduler/src` 与 `tests` 除本机无法解析 `vitest` 外零错误；根仓库既有 `zod` 缺失错误不在本包范围。
+- **文档门禁** — confirmed by: README limitations 397 个通过；model experience 397 个通过；doc refs 5252 个可解析；doc budgets 7 个在预算内。
+- **翻译配对（本包范围）** — confirmed by: `packages/nilm/README.md`、`packages/nilm/sentinel/README.md`、`packages/nilm/scheduler/README.md`、`packages/nilm/notify/README.md` 四个命名配对一致；对应 `README.i18n.yaml` 已重算。
 
 ---
 
 ## What Did NOT Work (and why)
 
-- **`pnpm install --offline --lockfile-only`** — failed because: 本机 `pnpm` 直接段错误（`Segmentation fault`），沙箱内外都无法执行。`pnpm-lock.yaml` 已按 workspace 依赖手工补齐，并用 Python YAML 解析与 package.json 依赖对比校验通过；下次应在正常环境运行一次 `pnpm install` 让 pnpm 自己重写 lockfile。
-- **沙箱内 `git add` / `git commit`** — not executed because: 当前环境 `.git` 只读；沙箱外审批因外部 API 余额不足（402）无法完成。阶段 3 仍未提交。
-- **根级 `pnpm run typecheck`** — failed because: 仓库既有的 `zod` 模块缺失与 `vendor/cordis` 类型错误；这些错误在本会话前已存在，且 NILM 包零错误。
-- **真实 30 秒 SLO、真实 MySQL `SKIP LOCKED`、微信/企微/短信联调** — 未执行，因为没有测试库、真实渠道账号和网关凭证；不能声称 G3-1/G3-3/G3-4 已通过。
-- **`vitest --coverage`** — failed because: 临时配置缺少 `@vitest/coverage-v8` 依赖；未获得覆盖率数字。
+- **全仓翻译配对门禁** — failed because: 已存在的 `docs/nilm-ai-agent-detailed-design-phase0.md` 至 `phase3.md` 缺少双语配对；这些文件不属于本阶段改动，未擅自生成翻译。本阶段改动的三个 README 配对已单独验证通过。
+- **根级 `pnpm` 命令** — not executed because: 本机 `pnpm` 直接段错误；测试与类型检查改用 store 中的 `vitest.mjs` / `tsc` 可执行文件。
+- **`vitest --coverage`** — not executed because: 临时环境缺少 `@vitest/coverage-v8`，无法取得覆盖率数字。新增 `store.ts`、`data-source.ts`、`summary-agent.ts` 中，前两者已有直接用例，`summary-agent.ts` 的 Cordis 适配仍未覆盖。
+- **真实 MySQL 并发领取、08:35 送达率、渠道回执、真实模型摘要** — 未执行，因为没有测试库、真实接收方与供应商凭证；不能声称 G4-1 现场证据已通过。
+- **git 提交** — 未执行：当前环境 `.git` 只读；阶段 3 与本阶段改动仍未提交。
 
 ---
 
 ## What Has NOT Been Tried Yet
 
-- 阶段 4：`nilm-scheduler`、每日 08:30 晨报、月度 20/25 日力调预测、R-06/R-07/R-08。
-- 交付 `test:slo:alert` 脚本并进行真实端到端 SLO 演练。
-- 真实 MySQL 多进程 Outbox 抢占测试与死锁观察。
-- 微信订阅消息、公众号模板、企微机器人、短信供应商沙箱联调；短信供应商仍待 D-12 决策。
-- 自适应基线：按同租户、同车间、同星期几、同时间段计算过去 4 周中位数，替换当前 `baseline_kw`。
-- R-03 的实时功率过载路径；R-04 需要上游分相电流列。
-- BFF 告警分页：当前签名层拒绝 query string，需先调整签名契约。
+- BFF / Tool 的“查询昨日晨报”读取能力；当前报告只写 `nilm_report`，模型不可见。
+- R-08 冷热库一致性检查；当前只写 warning，等待冷电量路由。
+- 默认部署的月度 `E_p`/`E_q` 预聚合；当前无配置时 `pf_forecast` 以 `DATA_UNAVAILABLE` 失败。
+- WBS 4.2 StatefulSet/PVC 同分片恢复演练。
+- WBS 4.3 `test:perf:load` 百家工厂 30 分钟压测。
+- WBS 4.4 安全渗透、脱敏审计与全量验收。
+- 阶段 3 遗留的真实 30 秒 SLO、MySQL `SKIP LOCKED` 多进程 Outbox、微信/企微/短信沙箱联调。
+- R-01b 自适应 4 周基线、R-03 实时功率过载、R-04 分相电流列。
 
 ---
 
@@ -57,94 +54,97 @@
 
 | File | Status | Notes |
 | --- | --- | --- |
-| `packages/nilm/sentinel/` | PASS: Complete (offline) | 巡检服务、规则、抑制、MySQL store、扫描器、测试与双语 README |
-| `packages/nilm/notify/` | PASS: Complete (offline) | Outbox store/dispatcher、四渠道、富化、诊断 Agent、测试与双语 README |
-| `packages/nilm/source/src/transaction.ts` | PASS: Complete | `SqlTransaction` / `MysqlTransactionRunner`，BEGIN/COMMIT/ROLLBACK 与连接池释放 |
-| `packages/nilm/source/src/index.ts` | PASS: Complete | `localTransactions` 依赖与 `transaction()` 接缝；关闭时释放事务池 |
-| `packages/nilm/source/src/sql-guard.ts` | PASS: Complete | `NILM_LOCAL_TABLES` 加入 `nilm_sentinel_watermark` |
-| `packages/nilm/source/sql/init-nilm-system.sql` | PASS: Complete | 18 表；`silence_key`、索引、`nilm_sentinel_watermark` |
-| `packages/nilm/service/src/http.ts` | PASS: Complete | `AlertApi` 接缝；列表/确认已接入；未挂载保留降级 |
-| `packages/nilm/service/src/index.ts` | PASS: Complete | `inject` 增加 `nilmSentinel`；告警页 JSON 投影 |
-| `packages/bundle/nilm-app/cordis.patch.yml` | PASS: Complete | 挂载 sentinel/notify，全部 `NILM_*` 配置 |
-| `packages/bundle/nilm-app/package.json` | PASS: Complete | 新增两个 workspace 依赖 |
-| `pnpm-lock.yaml` | PASS: Manually updated | 已手工加入 4 个 importer 依赖；需正常环境重跑 pnpm 验证 |
-| `docs/nilm-ai-agent-architecture.md` | PASS: Complete | §8 水位线、silence_key、Outbox 字段、富化回填已更新 |
-| `docs/nilm-ai-agent-high-level-design.md` | PASS: Complete | 18 表、DDL、API 契约、阶段 3 状态与边界 |
-| `docs/nilm-ai-agent-development-plan.md` | PASS: Complete | 17→18 表；§5.4 当前实现状态与证据门 |
-| `packages/nilm/README.md` / `README.zh.md` | PASS: Complete | 包组新增 sentinel/notify |
-| `packages/nilm/source|service|bundle/nilm-app` README 双语 | PASS: Complete | 新接缝、告警端点、阶段 3 边界已同步 |
-| `scripts/verify-package-readme-model-experience.ts` | PASS: Complete | 两个新包加入无 Model Experience 段白名单 |
-| `tsconfig.base.json` / `tsconfig.host.json` | PASS: Complete | 新包 alias 与项目引用 |
+| `packages/nilm/scheduler/` | PASS: Complete (offline) | 时间、PF、质量、报告、MySQL 仓储、默认采集器、摘要适配、Cordis 服务与测试 |
+| `packages/nilm/scheduler/tests/store.spec.ts` | PASS: New | MySQL 仓储领取状态、报告去重、告警统计、PF 阈值、审计截断 |
+| `packages/nilm/scheduler/tests/data-source.spec.ts` | PASS: New | 默认采集器的可恢复缺口、致命失败、月度预聚合与 R-08 观测 |
+| `packages/nilm/notify/src/model.ts` / `store.ts` | PASS: Complete | Outbox 任务携带 `report_id`；成功投递回填 `nilm_report.delivered_at` |
+| `packages/nilm/notify/tests/store.spec.ts` | PASS: New | 报告领取映射、送达回填、告警/报告隔离与租约丢失 |
+| `packages/nilm/notify/README.md` / `README.zh.md` / `.i18n.yaml` | PASS: Complete | 报告 Outbox 与 `delivered_at` 回填说明；双语哈希已重算 |
+| `packages/nilm/scheduler/README.md` / `README.zh.md` / `.i18n.yaml` | PASS: Complete | 双语配对哈希已重算 |
+| `packages/bundle/nilm-app/cordis.patch.yml` | PASS: Complete | 挂载 `nilm-scheduler`；`enrichConcurrency/enrichCwd` 保留在 notify |
+| `packages/bundle/nilm-app/tests/bundle.spec.ts` | PASS: Complete | 生产行清单包含 scheduler |
+| `docs/nilm-ai-agent-development-plan.md` | PASS: Complete | 新增 §6.4 当前实现状态与证据门 |
+| `docs/nilm-ai-agent-high-level-design.md` | PASS: Complete | §7.6/7.7 实现边界与延期项已更新 |
+| `docs/nilm-ai-agent-architecture.md` | PASS: Complete | §8.6、部署边界、定时任务模式已更新 |
+| `packages/nilm/README.md` / `README.zh.md` | PASS: Complete | 包表新增 scheduler |
+| `packages/nilm/sentinel/README.md` / `README.zh.md` | PASS: Complete | R-06/R-07/R-08 归属改为 scheduler |
 | `SESSION_STATE.md` | PASS: New | 本文件 |
 
-未跟踪文件：`packages/nilm/sentinel/`、`packages/nilm/notify/`、`packages/nilm/source/src/transaction.ts`、`SESSION_STATE.md`。
+未跟踪文件：`packages/nilm/scheduler/`。已修改未提交：阶段 3 的 sentinel/notify/source 等文件、本阶段的 docs、bundle、根配置、lockfile 与会话状态。
 
 ---
 
 ## Decisions Made
 
-- **告警判定不用模型** — reason: Sentinel 只做确定性规则；Agent 只做异步解释，绝不修改级别、不关闭告警、不阻塞投递。
-- **抑制键与去重键分离** — reason: `silence_key = tenant+rule+scope+metric` 跨窗口生效；`dedupe_key` 追加 `bucket_start` 保证每窗口幂等落库。抑制事件仍写事件表（`status=suppressed`），不写 Outbox。
-- **升级只穿透一次** — reason: 升级事件以 critical 落库后，下一窗口历史中已有 critical，`escalationFor` 返回 `undefined`，随后由静默窗口抑制，避免每 5 分钟重复升级风暴。
-- **安全规则不静默** — reason: R-03/R-04/R-05 的 critical 结果 `bypassSilence=true`。
-- **Outbox 至少一次** — reason: 客户端按 `notification_id` 去重；接受 provider 已接收但 `markSent` 前崩溃导致重复。
-- **告警列表不暴露分页** — reason: 当前签名契约不接受 query string；先固定返回最近 50 条，待契约调整后再加分页。
-- **确认接口先查可见性再锁定事件行** — reason: 避免 `FOR UPDATE` 与外层 `EXISTS` 子查询组合造成 MySQL 锁范围异常。
-- **不继承 `dsh-base`** — reason: 生产树只挂载 NILM 所需插件，禁止 shell、文件系统、Web、MCP、终端、sandbox、subagent 工具；`nilm-app` 启动守卫会验证工具面。
+- **幂等键为 `(job_type, tenant_id, business_date)`** — reason: 同一租户同一业务日只计算一次；晨报业务日是昨日，力调与 R-08 使用执行日。
+- **多副本依靠数据库幂等而非 Leader 选举** — reason: `nilm_job_run` 唯一键、事务领取与租约即可阻止同业务日重复计算；部署表更新为 1+ 副本。
+- **R-06 只做能量加权 PF** — reason: 禁止逐点 PF 平均；当月已完成日实际值 + 最近 7 个同星期中位数，缺失星期回退最近 7 日中位数。
+- **R-06 无政策或无月度 P/Q 必须失败** — reason: 不以估算或假数据通过；默认 `MonthlyEnergySource` 显式抛 `DATA_UNAVAILABLE`。
+- **模型只写摘要文字** — reason: payload 数字、风险等级、接收方与投递均由确定性代码控制；摘要失败、空白或超时保留模板。
+- **报告投递经共享 Outbox** — reason: `nilm_report` 按 `(tenant, report_type, report_date)` 去重；Outbox `notification_id = report_id`，渠道重试归 `nilm-notify`。
+- **R-08 不向客户发送** — reason: 覆盖率、父子偏差与冷热一致性属于运维数据质量，只写 `nilm_security_audit` 与日志。
+- **scheduler 默认不挂模型** — reason: 仅配置 `summaryModel` 时创建一次性 Cordis Agent；默认模板路径不产生 Session 或模型请求。
 
 ---
 
 ## Blockers & Open Questions
 
-- 阶段 3 尚未提交 git；`.git` 在当前沙箱只读，需用户在正常终端执行提交。
-- 真实环境证据门未签署：30 秒 SLO、MySQL `SKIP LOCKED`、渠道供应商联调。
-- 上游 `nilm_unsafe_record` 是否有 `(asset_id, record_time, record_id)` 可用索引仍待 DBA 评估。
-- `pnpm` 段错误原因未知；正常环境需重跑 `pnpm install` 验证 lockfile。
-- R-01b 自适应基线、R-03 实时过载、R-04 分相电流均为已知延期项，不要误报为已完成。
+- 阶段 3 与阶段 4.1 尚未提交；`.git` 在当前沙箱只读，需在正常终端执行提交。
+- 全仓 translation-pairing 被四个既有详细设计文档阻塞；需要单独补英文配对或调整其登记范围。
+- 真实 G4-1 送达率 >99% 无在线渠道回执，不能签署。
+- 默认部署必须提供月度 `E_p`/`E_q` 预聚合，否则 R-06 每天失败；需要上游接口或可信汇总表。
+- BFF 查询晨报 Tool 未实现；设计文档已将其列为延期项。
+- 覆盖率门禁未取得数字；若 CI 对 `packages/*/*/src` 执行 per-file 100%，需为 `summary-agent.ts` 补 Cordis 适配测试，并确认阶段 3 store 文件的既有缺口。
 
 ---
 
 ## Exact Next Step
 
-1. 在可写 `.git` 的正常终端提交阶段 3：
+1. 在可写 `.git` 的正常终端提交阶段 3 与阶段 4.1：
 
 ```sh
 cd /home/picohood/projects/opensource/deepseek-harness
-git add docs packages/nilm packages/bundle/nilm-app scripts tsconfig.base.json tsconfig.host.json pnpm-lock.yaml SESSION_STATE.md
-git commit -m "feat(nilm): implement Phase 3 sentinel rules, alert lifecycle, and reliable notification outbox"
+git add docs packages/nilm packages/bundle/nilm-app scripts tsconfig.base.json tsconfig.host.json pnpm-lock.yaml package.json SESSION_STATE.md
+git commit -m "feat(nilm): add scheduled reports, monthly PF projection, and data-quality jobs"
 ```
 
-2. 新开对话后先读本文件与 `docs/nilm-ai-agent-development-plan.md` §5.4，再进入阶段 4：先实现 `nilm-scheduler` 与 `nilm_job_run` 幂等，再补 R-06/R-07/R-08。
-3. 如要先补阶段 3 证据门，优先做真实 MySQL 多进程 Outbox 演练，再做 30 秒 SLO，再做渠道沙箱。
+2. 下一开发单元优先 WBS 4.2：新增 `deploy/k8s/` StatefulSet、Service、Ingress、NetworkPolicy 与同分片 PVC 恢复测试；不要声称跨分片漂移恢复。
+3. 若先补产品闭环，再实现“查询昨日晨报”Tool：只读 `nilm_report`，按已验证 `tenant_id` 与 `user_ref` 绑定，不重算、不暴露跨租户报告。
+4. 现场证据门顺序：真实 MySQL 幂等并发 → 渠道沙箱与 08:35 送达率 → 百家工厂压测 → 安全渗透。每项必须保存命令、输出与时间戳。
 
 ---
 
 ## Environment & Setup Notes
 
-- 测试（临时配置可能仍在 `/tmp/vitest.nilm.config.mjs`）：
+- NILM 全量测试（临时配置在 `/tmp/vitest.nilm.config.mjs`）：
 
 ```sh
 V=$(find ~/.local/share/pnpm/store/v11/links/@/vitest -name vitest.mjs | head -1)
 node "$V" run --config /tmp/vitest.nilm.config.mjs
 ```
 
-若临时配置丢失，需重建 alias：`@deepseek-ai/dsh-nilm-*` 指向 `packages/nilm/*/src`，并加入 `packages/util/{brand,values}`、`packages/core/{tools,scope,system-prompt}`、`vendor/{cordis,schemastery,cosmokit,include,loader,timer}`；`include` 同时覆盖 `packages/nilm/*/tests/**/*.spec.ts` 与 `packages/bundle/nilm-app/tests/**/*.spec.ts`。
+- 调度器单项：
 
-- TypeScript 单包检查可直接用本机 store 的 `tsc`，不要依赖根 `pnpm`：
+```sh
+node "$V" run --config /tmp/vitest.nilm.config.mjs packages/nilm/scheduler/tests
+node "$V" run --config /tmp/vitest.nilm.config.mjs packages/nilm/scheduler/tests/morning-report.spec.ts -t 'twenty tenants'
+```
+
+- 类型检查（临时 `noEmit` 配置在 `/tmp/tsconfig.scheduler.json`）：
 
 ```sh
 D=$(ls -d ~/.local/share/pnpm/store/v11/links/@/typescript/5.9.3/*/node_modules/typescript/bin/tsc | head -1)
-node "$D" -p <临时 noEmit 配置>
+node "$D" -p /tmp/tsconfig.scheduler.json
 ```
 
 - 文档门禁：
 
 ```sh
-node --experimental-transform-types scripts/verify-translation-pairing.ts
 node --experimental-transform-types scripts/verify-package-readme-limitations.ts
 node --experimental-transform-types scripts/verify-package-readme-model-experience.ts
 node --experimental-transform-types scripts/verify-doc-refs.ts
 node --experimental-transform-types scripts/verify-doc-budgets.ts
+node --experimental-transform-types scripts/verify-translation-pairing.ts packages/nilm/README.md packages/nilm/sentinel/README.md packages/nilm/scheduler/README.md packages/nilm/notify/README.md
 ```
 
 - 当前环境 `pnpm` 会段错误；不要反复重试。`git` 写操作需在正常终端执行。

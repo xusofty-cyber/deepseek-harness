@@ -104,6 +104,7 @@ export class MysqlOutboxStore implements OutboxStore {
         tenantId: string
         userRef: string | null
         eventId: string | null
+        reportId: string | null
         channel: NotificationChannel
         templateId: string | null
         recipientCiphertext: Uint8Array | null
@@ -115,7 +116,7 @@ export class MysqlOutboxStore implements OutboxStore {
         severity: OutboxTask['severity'] | null | undefined
       }>(
         `SELECT o.id, o.notification_id AS notificationId, o.tenant_id AS tenantId,
-                o.user_ref AS userRef, o.event_id AS eventId, o.channel,
+                o.user_ref AS userRef, o.event_id AS eventId, o.report_id AS reportId, o.channel,
                 o.template_id AS templateId, o.recipient_ciphertext AS recipientCiphertext,
                 o.recipient_masked AS recipientMasked, o.payload_json AS payloadJson,
                 o.dedupe_key AS dedupeKey, o.attempt_count AS attemptCount,
@@ -151,6 +152,7 @@ export class MysqlOutboxStore implements OutboxStore {
           tenantId: row.tenantId,
           userRef: row.userRef,
           eventId: row.eventId,
+          reportId: row.reportId,
           channel: row.channel,
           templateId: row.templateId,
           recipientCiphertext: toBytes(row.recipientCiphertext),
@@ -179,6 +181,14 @@ export class MysqlOutboxStore implements OutboxStore {
       )
       if (affected === 0) return
       await upsertRecord(tx, task, 'sent', result.providerMessageId ?? null, null, nowMs)
+      if (task.reportId !== null) {
+        await tx.affected(
+          `UPDATE nilm_report
+              SET status = 'delivered', delivered_at = ?
+            WHERE tenant_id = ? AND report_id = ? AND delivered_at IS NULL`,
+          [new Date(nowMs), task.tenantId, task.reportId],
+        )
+      }
       if (task.eventId === null) return
       const event = await tx.query<{ status: string }>(
         `SELECT status FROM nilm_alert_event

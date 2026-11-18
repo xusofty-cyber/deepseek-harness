@@ -41,6 +41,7 @@ export class MemoryOutboxStore implements OutboxStore {
       tenantId: overrides.tenantId ?? 'tenant-a',
       userRef: overrides.userRef ?? 'user-1',
       eventId: overrides.eventId ?? 'alert_1',
+      reportId: overrides.reportId ?? null,
       channel: overrides.channel ?? 'sms',
       templateId: overrides.templateId ?? 'tpl-1',
       recipientCiphertext: overrides.recipientCiphertext ?? null,

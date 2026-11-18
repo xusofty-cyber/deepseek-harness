@@ -141,6 +141,27 @@
         enrichConcurrency: !!js Number(process.env.NILM_ENRICH_CONCURRENCY ?? 2)
         enrichCwd: !!js process.env.NILM_ENRICH_CWD ?? process.cwd()
 
+    - id: nilm-scheduler
+      name: '@deepseek-ai/dsh-nilm-scheduler'
+      config:
+        tickIntervalMs: !!js Number(process.env.NILM_SCHEDULER_TICK_MS ?? 60000)
+        morningHour: !!js Number(process.env.NILM_SCHEDULER_MORNING_HOUR ?? 8)
+        morningMinute: !!js Number(process.env.NILM_SCHEDULER_MORNING_MINUTE ?? 30)
+        qualityHour: !!js Number(process.env.NILM_SCHEDULER_QUALITY_HOUR ?? 3)
+        qualityMinute: !!js Number(process.env.NILM_SCHEDULER_QUALITY_MINUTE ?? 30)
+        reportChannels: !!js JSON.parse(process.env.NILM_REPORT_CHANNELS ?? '["wx_subscribe"]')
+        reportTemplates: !!js JSON.parse(process.env.NILM_REPORT_TEMPLATES ?? '{}')
+        maxAttempts: !!js Number(process.env.NILM_NOTIFY_MAX_ATTEMPTS ?? 5)
+        jobLeaseMs: !!js Number(process.env.NILM_SCHEDULER_JOB_LEASE_MS ?? 300000)
+        jobRetryDelayMs: !!js Number(process.env.NILM_SCHEDULER_JOB_RETRY_MS ?? 300000)
+        summaryTimeoutMs: !!js Number(process.env.NILM_SCHEDULER_SUMMARY_TIMEOUT_MS ?? 20000)
+        summaryProvider: !!js process.env.NILM_SCHEDULER_SUMMARY_PROVIDER ?? 'deepseek-official'
+        summaryModel: !!js process.env.NILM_SCHEDULER_SUMMARY_MODEL ?? process.env.NILM_ENRICH_MODEL
+        summaryPromptVersion: !!js process.env.NILM_SCHEDULER_SUMMARY_PROMPT_VERSION ?? 'report-summary-v1'
+        qualityMinimumCoverage: !!js Number(process.env.NILM_R08_MIN_COVERAGE ?? 0.95)
+        qualityMaximumParentDeviation: !!js Number(process.env.NILM_R08_MAX_PARENT_DEVIATION ?? 0.01)
+        qualityMaximumHotColdDeviation: !!js Number(process.env.NILM_R08_MAX_HOT_COLD_DEVIATION ?? 0.01)
+
     - id: nilm-service
       name: '@deepseek-ai/dsh-nilm-service'
       config:

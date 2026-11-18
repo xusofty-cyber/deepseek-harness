@@ -23,13 +23,14 @@ This group holds the NILM factory-energy service that runs on the harness. It is
 | [`safety`](safety/README.md) | `nilmSafety` | Authorized unsafe-record retrieval and deterministic hazard projection |
 | [`sentinel`](sentinel/README.md) | `nilmSentinel` | Incremental safety scan, tenant rules, alert lifecycle, and transactional Outbox enqueue |
 | [`notify`](notify/README.md) | `nilmNotify` | Outbox dispatcher, channel gateways, retry policy, and asynchronous diagnosis |
+| [`scheduler`](scheduler/README.md) | `nilmScheduler` | Idempotent morning reports, monthly power-factor projection, and R-08 data-quality inspection |
 | [`prompt`](prompt/README.md) | — | Stable tenant-neutral system-prompt policy |
 | [`tools`](tools/README.md) | — | The six model-facing `nilm_*` tools with bounded structured facts |
 | [`service`](service/README.md) | — | Backend BFF: caller verification, conversation and turn state, REST endpoints, and SSE replay |
 
-Later stages add `charts`, `sentinel`, `scheduler`, and `notify` in the same group. `nilm-service` owns the HTTP/SSE BFF; no package in this group implements user permissions, an admin console, or a customer-facing Web application.
+`charts` remains future work. `nilm-service` owns the HTTP/SSE BFF; no package in this group implements user permissions, an admin console, or a customer-facing Web application.
 
 ## Known Limitations and Deferred Work
 
-- Stages 1 and 2 ship topology, timeseries, tariff, analytics, power-quality and CUSUM analysis, safety, prompt, the six model-facing tools, and the `nilm-service` BFF. Stage 3 adds sentinel rules and the Outbox notifier. The BFF keeps nonces, conversation metadata, and turn buffers in process memory; multi-replica deployment still needs Redis nonces and `nilm_conversation` persistence.
+- Stages 1 and 2 ship topology, timeseries, tariff, analytics, power-quality and CUSUM analysis, safety, prompt, the six model-facing tools, and the `nilm-service` BFF. Stage 3 adds sentinel rules and the Outbox notifier. Stage 4 adds the scheduled-report service. The BFF keeps nonces, conversation metadata, and turn buffers in process memory; multi-replica deployment still needs Redis nonces and `nilm_conversation` persistence.
 - Phase-current imbalance and a complete THD value remain unavailable until upstream exposes the corresponding columns; the tools return `null` or per-order availability instead of estimating them.

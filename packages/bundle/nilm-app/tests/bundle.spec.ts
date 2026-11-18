@@ -63,6 +63,7 @@ describe('dsh-nilm-app bundle', () => {
       ['nilm-tools', '@deepseek-ai/dsh-nilm-tools'],
       ['nilm-sentinel', '@deepseek-ai/dsh-nilm-sentinel'],
       ['nilm-notify', '@deepseek-ai/dsh-nilm-notify'],
+      ['nilm-scheduler', '@deepseek-ai/dsh-nilm-scheduler'],
       ['nilm-service', '@deepseek-ai/dsh-nilm-service'],
       ['nilm-tool-guard', '@deepseek-ai/dsh-nilm-app'],
     ])

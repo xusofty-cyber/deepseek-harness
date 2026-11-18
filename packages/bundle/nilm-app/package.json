@@ -44,6 +44,7 @@
     "@deepseek-ai/dsh-nilm-notify": "workspace:*",
     "@deepseek-ai/dsh-nilm-prompt": "workspace:*",
     "@deepseek-ai/dsh-nilm-safety": "workspace:*",
+    "@deepseek-ai/dsh-nilm-scheduler": "workspace:*",
     "@deepseek-ai/dsh-nilm-sentinel": "workspace:*",
     "@deepseek-ai/dsh-nilm-service": "workspace:*",
     "@deepseek-ai/dsh-nilm-source": "workspace:*",

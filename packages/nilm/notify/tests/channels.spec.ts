@@ -9,6 +9,7 @@ function task(overrides: Partial<OutboxTask> = {}): OutboxTask {
     tenantId: 'tenant-a',
     userRef: 'user-1',
     eventId: 'alert-1',
+    reportId: null,
     channel: 'sms',
     templateId: 'tpl-1',
     recipientCiphertext: Uint8Array.from(Buffer.from('13800138000', 'utf8')),

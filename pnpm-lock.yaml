@@ -2882,6 +2882,9 @@ importers:
       '@deepseek-ai/dsh-nilm-safety':
         specifier: workspace:*
         version: link:../../nilm/safety
+      '@deepseek-ai/dsh-nilm-scheduler':
+        specifier: workspace:*
+        version: link:../../nilm/scheduler
       '@deepseek-ai/dsh-nilm-sentinel':
         specifier: workspace:*
         version: link:../../nilm/sentinel
@@ -15185,6 +15188,49 @@ importers:
       '@deepseek-ai/dsh-nilm-source':
         specifier: workspace:*
         version: link:../source
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
+  packages/nilm/scheduler:
+    dependencies:
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:*
+        version: link:../../core/agent
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:*
+        version: link:../../util/brand
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
+      '@deepseek-ai/dsh-nilm-analytics':
+        specifier: workspace:*
+        version: link:../analytics
+      '@deepseek-ai/dsh-nilm-assets':
+        specifier: workspace:*
+        version: link:../assets
+      '@deepseek-ai/dsh-nilm-context':
+        specifier: workspace:*
+        version: link:../context
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-nilm-sentinel':
+        specifier: workspace:*
+        version: link:../sentinel
+      '@deepseek-ai/dsh-nilm-source':
+        specifier: workspace:*
+        version: link:../source
+      '@deepseek-ai/dsh-nilm-tariff':
+        specifier: workspace:*
+        version: link:../tariff
+      '@deepseek-ai/dsh-nilm-timeseries':
+        specifier: workspace:*
+        version: link:../timeseries
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~

@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Delivers committed alerts through a MySQL Outbox and enriches them asynchronously. Delivery is independent of the model: a slow or failed diagnosis never delays or rolls back a notification.
+Delivers committed alerts and scheduled reports through a MySQL Outbox and enriches alerts asynchronously. Delivery is independent of the model: a slow or failed diagnosis never delays or rolls back a notification.
 
 ## Configuration
 
@@ -15,6 +15,8 @@ Delivers committed alerts through a MySQL Outbox and enriches them asynchronousl
 `NotifyDependencies` replaces the Outbox store, channel transports, diagnosis agent, fetch implementation, and clock. `ChannelTransport` is the one required adapter seam: a new provider implements `send(task, signal)` and returns a provider message id or throws `DeliveryFailureError` with a retry classification. `DiagnosisAgent` separates the Cordis one-shot session from queue behavior.
 
 The gateway request contains the encrypted recipient material, its masked hint, deterministic template parameters, and `notificationId`. It never contains plaintext recipients or vendor credentials.
+
+Outbox rows with `report_id` carry scheduled reports instead of alerts. A successful report delivery updates `nilm_report.delivered_at` once; alert rows still drive the `notified` event transition.
 
 ## Known Limitations and Deferred Work
 

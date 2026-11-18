@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-通过 MySQL Outbox 投递已确认告警，并异步补充研判。投递不依赖模型：诊断缓慢或失败都不会延迟或回滚通知。
+通过 MySQL Outbox 投递已确认告警与定时报告，并异步补充告警研判。投递不依赖模型：诊断缓慢或失败都不会延迟或回滚通知。
 
 ## Configuration
 
@@ -15,6 +15,8 @@
 `NotifyDependencies` 可替换 Outbox 存储、渠道传输、诊断 Agent、fetch 实现与时钟。`ChannelTransport` 是唯一必需的适配接缝：新供应商实现 `send(task, signal)`，返回供应商消息 ID，或抛出带重试分类的 `DeliveryFailureError`。`DiagnosisAgent` 把 Cordis 短生命周期会话与队列行为分开。
 
 网关请求只包含加密接收方材料、掩码提示、确定性模板参数与 `notificationId`，不包含明文接收方或供应商凭证。
+
+携带 `report_id` 的 Outbox 行投递定时报告，而不是告警。报告首次成功投递会回填 `nilm_report.delivered_at`；告警行仍负责触发 `notified` 事件流转。
 
 ## Known Limitations and Deferred Work
 

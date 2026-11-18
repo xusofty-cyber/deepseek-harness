@@ -118,7 +118,7 @@ declare module '@deepseek-ai/cordis' {
 | `nilm-edge` | Deployment/Ingress | 2+ | 无状态 | TLS、WAF、限流、路由；不解析业务身份 |
 | `nilm-agent` | StatefulSet（按租户分片） | 每分片 1 主 | PVC（Session JSONL） | dsh runtime、`nilm-service` BFF、Tool、领域服务 |
 | `nilm-sentinel` | Deployment | 1 Leader + 备用 | DB/Redis 规则状态 | 5 秒增量巡检、告警去重与入队 |
-| `nilm-scheduler` | Deployment | 1 Leader | DB 任务状态 | 08:30 晨报、20/25 日力调预测、数据质量巡检 |
+| `nilm-scheduler` | Deployment | 1+（数据库幂等） | DB 任务状态 | 08:30 晨报、20/25 日力调预测、数据质量巡检 |
 | `nilm-notifier` | Deployment | 2+ | 无状态 | 从 Outbox 领取任务，按渠道限流 |
 | `nilm-cold-proxy` | 内网 Deployment | 2 | 无状态 | 只读、限查询、mTLS，隔离冷库 |
 | Redis | 托管/集群 | 3 | 有状态 | 限流、nonce、租约、短 TTL 缓存 |
@@ -126,7 +126,7 @@ declare module '@deepseek-ai/cordis' {
 
 上游 MySQL、TDengine 热库与冷库不是本项目部署单元，只作为只读依赖。Agent 不能做成无状态 Serverless：Session 持久化、模型长连接、工具上下文与租户分片都需要稳定的进程所有权。
 
-`nilm-sentinel` 与 `nilm-scheduler` 不挂模型与 Session；需要摘要或诊断文案时，通过内网专用接口调用 `nilm-agent`，不自行创建模型请求。
+`nilm-sentinel` 不挂模型与 Session；需要诊断文案时通过内网专用接口调用 `nilm-agent`。`nilm-scheduler` 默认只使用确定性模板；仅当部署配置 `summaryModel` 时，才通过一次性 Cordis Agent 生成摘要文字，报表数字与投递仍由确定性流水线控制。
 
 dsh Session 采用单写者所有权，横向扩展必须显式处理：
 
@@ -1124,27 +1124,31 @@ Agent 只做“解释与建议”，不决定是否告警：Sentinel 事务提�
 每日晨报：
 
 1. `nilm-scheduler` 在 08:30（`Asia/Shanghai`）触发，检查 `(tenant_id, report_type, report_date)` 幂等键。
-2. `nilm-analytics` 先生成昨日总电量、电度电费、峰平谷占比、重点车间排行、安全隐患与功率因数风险。
-3. `nilm-scheduler` 调用 `nilm-agent` 报表接口生成摘要与建议；Agent 只写摘要，不改数字。
-4. 结果写 `nilm_report`，再入 Outbox；08:35 前送达率目标 > 99%，失败重试不回退到“重新查一遍”。
+2. `nilm-analytics` 先生成昨日总电量、电度电费、峰平谷占比、重点车间排行、安全隐患总量与未处理数，以及功率因数风险。
+3. 默认使用确定性模板摘要；配置 `summaryModel` 时由一次性 Agent 只写摘要与建议，不改数字，也不控制投递。
+4. 结果写 `nilm_report`，再入 Outbox；首个渠道投递成功后由 notifier 回填 `delivered_at`。08:35 前送达率目标 > 99%，失败重试不回退到“重新查一遍”。
 5. 用户可在对话中查询“昨天的晨报”，Tool 读取已生成报告，避免重复计算。
 
 月度力调预测：
 
 1. 每月 20、25 日汇总当月有功电量 `E_p` 与无功电量 `E_q`，按 `PF = E_p / sqrt(E_p² + E_q²)` 计算能量加权功率因数。
 2. 剩余天数按最近 7 个同工作日中位数外推，明确标注外推假设。
-3. 若 `nilm_pf_policy` 有可执行公式，计算奖惩金额；否则只输出风险等级、估算区间与电容器组投切建议。
+3. 当前只输出风险等级、估算区间与电容器组投切建议；可执行的 `nilm_pf_policy` 奖惩公式仍属部署决策。
 4. 任务执行结果写 `nilm_job_run`；同一租户同一天只执行一次。
 
-数据质量巡检（R-08）每日低峰期检查覆盖率、父子计量偏差、冷热库一致性；失败写运维告警，不发给客户。
+数据质量巡检（R-08）每日低峰期检查覆盖率与父子计量偏差；冷热库一致性待冷电量路由就绪后启用。失败写运维审计，不发给客户。
 
-### 7.7 阶段 3 实现状态与边界
+### 7.7 阶段 3 与阶段 4 实现状态及边界
 
 阶段 3 已实现 `nilm-sentinel` 的 R-01a/R-01b/R-02/R-03/R-04/R-05、告警状态机、跨窗口抑制与升级、事务化 Outbox 入队，以及 `nilm-notify` 的 Outbox 调度、四渠道网关契约、显式退避与 8 秒异步富化。BFF 的 `/v1/alerts` 与确认接口已接入 Sentinel，并在未挂载时保留显式不可用降级。
 
+阶段 4 已实现 `nilm-scheduler`：上海业务时区到期扫描、R-07 晨报、R-06 月度力调预测、R-08 数据质量巡检、`nilm_job_run` 幂等领取与失败重试、`nilm_report` 写入和共享 Outbox 入队。晨报与力调报告默认使用确定性模板；模型摘要受硬超时约束，失败时保留模板，不能修改数字或投递。
+
 仍属阶段 4 或现场验证的内容：
 
-- R-06 力调风险、R-07 每日晨报、R-08 数据质量巡检和 `nilm-scheduler` 尚未实现。
+- R-06 默认部署缺少月度有功/无功预聚合，任务会以 `DATA_UNAVAILABLE` 失败；必须配置 `MonthlyEnergySource` 或上游日汇总。力调奖惩金额未计算。
+- R-08 已实现覆盖率与父子计量偏差检查；冷热库一致性在配置冷电量路由前保持停用。
+- BFF 尚缺用户对话查询昨日晨报的 Tool；报告已持久化，但模型无法读取。
 - 30 秒端到端 SLO、真实 MySQL `SKIP LOCKED` 多进程抢占、微信/企微/短信供应商联调必须用真实环境演练，离线单测不能替代签署结论。
 - 短信供应商仍待 D-12；当前只有渠道契约与 Mock/未配置降级。
 - 上游增量索引 `(asset_id, record_time, record_id)` 的 DBA 评估仍开放；若索引不可用，扫描器不能承诺 5 秒时效。

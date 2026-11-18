@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/nilm/scheduler/README.md
+/deepseek-ai-dsh-nilm-scheduler:
+  en: 783f6cfe2cc51863
+  zh: 97692e1e119f3534
+/deepseek-ai-dsh-nilm-scheduler/configuration:
+  en: 2a99d1cba35df75c
+  zh: 7737296a05f8ec86
+/deepseek-ai-dsh-nilm-scheduler/extension-points:
+  en: 6fc5de80564389e0
+  zh: 1c781cc1e6ff6b8b
+/deepseek-ai-dsh-nilm-scheduler/known-limitations-and-deferred-work:
+  en: 38c710ca2c32fa94
+  zh: 23d0f3e1aff7eb49

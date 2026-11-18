@@ -3,14 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/nilm/notify/README.md
 /deepseek-ai-dsh-nilm-notify:
-  en: 95ecf73565a6bc6b
-  zh: a3e5254a8fef7227
+  en: 4b41587bbc90b133
+  zh: 8256a6f6c52cfa1f
 /deepseek-ai-dsh-nilm-notify/configuration:
   en: 9826b048358874cd
   zh: 1900670239364f18
 /deepseek-ai-dsh-nilm-notify/extension-points:
-  en: 67664aed523cf5bc
-  zh: 912242b1d3c3b654
+  en: 91de0f40f5dc0663
+  zh: cecc39361a3bc62a
 /deepseek-ai-dsh-nilm-notify/known-limitations-and-deferred-work:
   en: 4126e1d186ae2b6d
   zh: 355104f7ca527e21

@@ -18,7 +18,7 @@ Tenant thresholds live in `nilm_alert_rule.threshold_json` with `nilm_tenant_con
 
 ## Known Limitations and Deferred Work
 
-- R-01a/R-01b/R-02/R-03/R-04/R-05 are implemented. R-06 power-factor risk, R-07 morning report, and R-08 data-quality digest remain stage-4 work.
+- R-01a/R-01b/R-02/R-03/R-04/R-05 are implemented. R-06 power-factor risk, R-07 morning report, and R-08 data-quality inspection are implemented in `nilm-scheduler`; this package does not own scheduled reports.
 - `SELECT ... FOR UPDATE SKIP LOCKED` Outbox claiming and the 30-second detection-to-delivery SLO are verified offline only; they still require a live MySQL and gateway rehearsal before an SLO claim.
 - Energy rules depend on hot-store power and appliance-state availability. A missing signal produces no alert rather than a guessed baseline.
 - R-01b compares against the tenant-configured `baseline_kw`; automatic four-week, same-weekday, same-time median calculation is deferred.

@@ -18,7 +18,7 @@
 
 ## Known Limitations and Deferred Work
 
-- 已实现 R-01a/R-01b/R-02/R-03/R-04/R-05。R-06 力调风险、R-07 晨报、R-08 数据质量摘要仍属阶段 4。
+- 已实现 R-01a/R-01b/R-02/R-03/R-04/R-05。R-06 力调风险、R-07 晨报与 R-08 数据质量巡检由 `nilm-scheduler` 实现；本包不负责定时报告。
 - `SELECT ... FOR UPDATE SKIP LOCKED` 的 Outbox 抢占与“检测到触达 30 秒”SLO 仅完成离线验证；在给出 SLO 结论前仍需真实 MySQL 与渠道网关演练。
 - 用能规则依赖热库功率与设备状态的可用性。信号缺失时不产生告警，也不猜测基线。
 - R-01b 使用租户配置的 `baseline_kw` 作为基线；按同租户、同星期、同时间段自动计算过去 4 周中位数仍属延期工作。
