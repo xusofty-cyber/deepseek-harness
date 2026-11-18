@@ -21,6 +21,8 @@ This group holds the NILM factory-energy service that runs on the harness. It is
 | [`tariff`](tariff/README.md) | `nilmTariff` | Pure tariff-plan validation, effective-plan selection, and time-of-use slicing |
 | [`analytics`](analytics/README.md) | `nilmAnalytics` | Pure energy-cost, running/idle, appliance-usage, period-comparison, power-quality, and CUSUM feature calculations |
 | [`safety`](safety/README.md) | `nilmSafety` | Authorized unsafe-record retrieval and deterministic hazard projection |
+| [`sentinel`](sentinel/README.md) | `nilmSentinel` | Incremental safety scan, tenant rules, alert lifecycle, and transactional Outbox enqueue |
+| [`notify`](notify/README.md) | `nilmNotify` | Outbox dispatcher, channel gateways, retry policy, and asynchronous diagnosis |
 | [`prompt`](prompt/README.md) | — | Stable tenant-neutral system-prompt policy |
 | [`tools`](tools/README.md) | — | The six model-facing `nilm_*` tools with bounded structured facts |
 | [`service`](service/README.md) | — | Backend BFF: caller verification, conversation and turn state, REST endpoints, and SSE replay |
@@ -29,5 +31,5 @@ Later stages add `charts`, `sentinel`, `scheduler`, and `notify` in the same gro
 
 ## Known Limitations and Deferred Work
 
-- Stages 1 and 2 ship topology, timeseries, tariff, analytics, power-quality and CUSUM analysis, safety, prompt, the six model-facing tools, and the `nilm-service` BFF. The BFF keeps nonces, conversation metadata, and turn buffers in process memory; multi-replica deployment still needs Redis nonces and `nilm_conversation` persistence.
+- Stages 1 and 2 ship topology, timeseries, tariff, analytics, power-quality and CUSUM analysis, safety, prompt, the six model-facing tools, and the `nilm-service` BFF. Stage 3 adds sentinel rules and the Outbox notifier. The BFF keeps nonces, conversation metadata, and turn buffers in process memory; multi-replica deployment still needs Redis nonces and `nilm_conversation` persistence.
 - Phase-current imbalance and a complete THD value remain unavailable until upstream exposes the corresponding columns; the tools return `null` or per-order availability instead of estimating them.

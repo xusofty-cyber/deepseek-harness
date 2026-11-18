@@ -18,8 +18,8 @@ All deployment values come from the profile patch or `NILM_*` environment variab
 | `POST` | `/v1/turns` | Accepts one message and returns `202` with `turnId`, `sessionId`, `conversationId`, and `streamUrl`; repeats of `clientMessageId` return the same turn |
 | `GET` | `/v1/turns/{id}/stream` | SSE stream with monotonic ids, `Last-Event-ID` replay, and keepalive `ping` |
 | `POST` | `/v1/turns/{id}/cancel` | Cancels the active generation and returns `204` |
-| `GET` | `/v1/alerts` | Stage-1 skeleton that reports an empty, unavailable store |
-| `POST` | `/v1/alerts/{id}/ack` | Returns `DATA_UNAVAILABLE` until the Sentinel store exists |
+| `GET` | `/v1/alerts` | Lists caller-visible alerts when Sentinel is mounted; otherwise reports `available: false` |
+| `POST` | `/v1/alerts/{id}/ack` | Acknowledges a caller-visible alert and audits the outcome; `DATA_UNAVAILABLE` when Sentinel is not mounted |
 | `GET` | `/healthz`, `/readyz` | Liveness and dependency readiness |
 
 ## Caller envelope
@@ -36,4 +36,4 @@ Stage 1 accepts HMAC-SHA256 envelopes: `X-Nilm-Tenant-Id`, `X-Nilm-User-Ref`, `X
 - The nonce cache, conversation metadata, idempotency map, and turn buffers are process-local. A restart loses conversation listing and ownership mapping, and a second replica cannot replay or deduplicate another replica's work. Redis nonces and `nilm_conversation` persistence are required before multi-replica deployment.
 - Turn buffers and idempotency entries are retained for the process lifetime; stage 1 has no eviction or archival policy for them.
 - Security audit currently goes to the plugin logger as structured text; `nilm_security_audit` persistence arrives with the audit-store integration.
-- Alert routes are read-only skeletons. Real alert listing and acknowledgement wait for the stage-3 Sentinel store.
+- Alert listing and acknowledgement delegate to `nilmSentinel`; they remain unavailable by design when that plugin is not mounted. Pagination is not exposed until the signed-request contract accepts query parameters.

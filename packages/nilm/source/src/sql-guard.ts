@@ -18,6 +18,7 @@ export const NILM_LOCAL_TABLES = [
   'nilm_alert_transition',
   'nilm_notification_outbox',
   'nilm_notification_record',
+  'nilm_sentinel_watermark',
   'nilm_job_run',
   'nilm_report',
   'nilm_tariff_plan',

@@ -12,7 +12,7 @@
 
 ## 扩展点
 
-`SourceDependencies` 注入每个执行器或传输层，使测试与其他部署驱动可以替换实时端点。`ctx.nilmSource` 公布带门禁的 MySQL 读取（`queryLocalReadOnly`、`queryUpstreamReadOnly`、`listLocalTables`）、内部生成的 TDengine 读取（`queryHot`、`queryStats`）、固定模板冷查询（`queryCold`）、`probe` 与 `close`。TDengine 方法只供 `nilm-timeseries` 等领域适配器使用；模型侧 Tool 永远拿不到 SQL 文本。
+`SourceDependencies` 注入每个执行器或传输层，使测试与其他部署驱动可以替换实时端点。`ctx.nilmSource` 公布带门禁的 MySQL 读取（`queryLocalReadOnly`、`queryUpstreamReadOnly`、`listLocalTables`）、项目写事务（`transaction`）、内部生成的 TDengine 读取（`queryHot`、`queryStats`）、固定模板冷查询（`queryCold`）、`probe` 与 `close`。TDengine 方法只供 `nilm-timeseries` 等领域适配器使用；模型侧 Tool 永远拿不到 SQL 文本。
 
 `mysql2` 是可选的 peer，使核心包在组合期间无需解析原生驱动即可安装；部署镜像必须在 MySQL 探活或生产查询运行前提供 `mysql2@^3.11.0`。
 

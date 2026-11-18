@@ -8,14 +8,35 @@
     "src"
   ],
   "references": [
-    { "path": "../../core/agent" },
-    { "path": "../../llm/llm" },
-    { "path": "../../core/session" },
-    { "path": "../../session/session-persistence" },
-    { "path": "../context" },
-    { "path": "../core" },
-    { "path": "../../util/brand" },
-    { "path": "../../util/values" },
-    { "path": "../../../vendor/schemastery" }
+    {
+      "path": "../../core/agent"
+    },
+    {
+      "path": "../../llm/llm"
+    },
+    {
+      "path": "../../core/session"
+    },
+    {
+      "path": "../../session/session-persistence"
+    },
+    {
+      "path": "../context"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../../util/brand"
+    },
+    {
+      "path": "../../util/values"
+    },
+    {
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../sentinel"
+    }
   ]
 }

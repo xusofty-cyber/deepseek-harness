@@ -2873,12 +2873,18 @@ importers:
       '@deepseek-ai/dsh-nilm-core':
         specifier: workspace:*
         version: link:../../nilm/core
+      '@deepseek-ai/dsh-nilm-notify':
+        specifier: workspace:*
+        version: link:../../nilm/notify
       '@deepseek-ai/dsh-nilm-prompt':
         specifier: workspace:*
         version: link:../../nilm/prompt
       '@deepseek-ai/dsh-nilm-safety':
         specifier: workspace:*
         version: link:../../nilm/safety
+      '@deepseek-ai/dsh-nilm-sentinel':
+        specifier: workspace:*
+        version: link:../../nilm/sentinel
       '@deepseek-ai/dsh-nilm-source':
         specifier: workspace:*
         version: link:../../nilm/source
@@ -15130,6 +15136,37 @@ importers:
         specifier: workspace:~
         version: link:../../../vendor/cordis
 
+  packages/nilm/notify:
+    dependencies:
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:*
+        version: link:../../core/agent
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:*
+        version: link:../../util/brand
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
+      '@deepseek-ai/dsh-nilm-context':
+        specifier: workspace:*
+        version: link:../context
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-nilm-sentinel':
+        specifier: workspace:*
+        version: link:../sentinel
+      '@deepseek-ai/dsh-nilm-source':
+        specifier: workspace:*
+        version: link:../source
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
   packages/nilm/prompt:
     dependencies:
       '@deepseek-ai/dsh-system-prompt':
@@ -15153,6 +15190,31 @@ importers:
         specifier: workspace:~
         version: link:../../../vendor/cordis
 
+  packages/nilm/sentinel:
+    dependencies:
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:*
+        version: link:../../util/brand
+      '@deepseek-ai/dsh-nilm-assets':
+        specifier: workspace:*
+        version: link:../assets
+      '@deepseek-ai/dsh-nilm-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/dsh-nilm-source':
+        specifier: workspace:*
+        version: link:../source
+      '@deepseek-ai/dsh-nilm-timeseries':
+        specifier: workspace:*
+        version: link:../timeseries
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+
   packages/nilm/service:
     dependencies:
       '@deepseek-ai/dsh-agent':
@@ -15170,6 +15232,9 @@ importers:
       '@deepseek-ai/dsh-nilm-core':
         specifier: workspace:*
         version: link:../core
+      '@deepseek-ai/dsh-nilm-sentinel':
+        specifier: workspace:*
+        version: link:../sentinel
       '@deepseek-ai/dsh-session':
         specifier: workspace:*
         version: link:../../core/session

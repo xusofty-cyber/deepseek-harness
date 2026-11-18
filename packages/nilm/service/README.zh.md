@@ -18,8 +18,8 @@
 | `POST` | `/v1/turns` | 受理一条消息并返回 `202` 与 `turnId`、`sessionId`、`conversationId`、`streamUrl`；重复 `clientMessageId` 返回同一轮 |
 | `GET` | `/v1/turns/{id}/stream` | SSE 流，带单调 id、`Last-Event-ID` 重放与 `ping` 心跳 |
 | `POST` | `/v1/turns/{id}/cancel` | 取消当前生成并返回 `204` |
-| `GET` | `/v1/alerts` | 阶段 1 骨架，报告空且不可用的存储 |
-| `POST` | `/v1/alerts/{id}/ack` | 在 Sentinel 存储就绪前返回 `DATA_UNAVAILABLE` |
+| `GET` | `/v1/alerts` | 挂载 Sentinel 时列出调用方可见告警；否则报告 `available: false` |
+| `POST` | `/v1/alerts/{id}/ack` | 确认调用方可见告警并写审计；未挂载 Sentinel 时返回 `DATA_UNAVAILABLE` |
 | `GET` | `/healthz`、`/readyz` | 存活与依赖就绪检查 |
 
 ## 调用方信封
@@ -36,4 +36,4 @@
 - nonce 缓存、会话元数据、幂等映射与本轮缓冲均为进程内状态。重启会丢失会话列表与归属映射，第二个副本无法重放或去重另一副本的工作。多副本部署前需要 Redis nonce 与 `nilm_conversation` 持久化。
 - 每轮缓冲与幂等记录在进程生命周期内保留；阶段 1 尚未实现淘汰或归档策略。
 - 安全审计当前以结构化文本写入插件日志；`nilm_security_audit` 持久化随审计存储集成交付。
-- 告警路由是只读骨架。真实告警列表与确认等待阶段 3 的 Sentinel 存储。
+- 告警列表与确认委托给 `nilmSentinel`；该插件未挂载时按设计保持不可用。在签名请求契约接受查询参数前，不提供分页。

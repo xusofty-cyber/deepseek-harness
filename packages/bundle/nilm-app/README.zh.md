@@ -2,13 +2,13 @@
 
 [English](README.md) | 中文
 
-独立 NILM 生产 profile。`cordis.patch.yml` 是完整的 Cordis 配置树，而不是 `dsh-base` 上的覆盖层。它挂载模型、会话、工具注册表、Agent Loop、NILM context/source/assets/timeseries/tariff/analytics/safety 服务、NILM 提示词策略、4 个 `nilm_*` 工具、`nilm-service` HTTP/SSE BFF 与启动时的工具面守卫。Shell、文件系统、Web、MCP、终端、sandbox、subagent、附件、凭据与插件管理行均不存在。
+独立 NILM 生产 profile。`cordis.patch.yml` 是完整的 Cordis 配置树，而不是 `dsh-base` 上的覆盖层。它挂载模型、会话、工具注册表、Agent Loop、NILM context/source/assets/timeseries/tariff/analytics/safety 服务、巡检规则引擎、通知 Outbox、NILM 提示词策略、6 个面向模型的 `nilm_*` 工具、`nilm-service` HTTP/SSE BFF 与启动时的工具面守卫。Shell、文件系统、Web、MCP、终端、sandbox、subagent、附件、凭据与插件管理行均不存在。
 
 ## 配置
 
 所有端点与凭据来自 `NILM_*` 环境变量或部署方拥有的 profile patch。仓库不内嵌数据库地址、账号或密码。`NILM_DEEPSEEK_API_KEY` 选择模型凭据；数据源服务独立读取五个端点族。
 
-该 profile 是 `@deepseek-ai/dsh-official-bundles` 中的随附模板，因此 `dsh --profile nilm` 会从 `@deepseek-ai/dsh-nilm-app` 初始化它。
+该 profile 是 `@deepseek-ai/dsh-official-bundles` 中的随附模板，因此 `dsh --profile nilm` 会从 `@deepseek-ai/dsh-nilm-app` 初始化它。阶段 3 还读取 `NILM_SENTINEL_*`、`NILM_ALERT_TEMPLATES` 与 `NILM_NOTIFY_*`；渠道网关 URL 与令牌在供应商签约前保持为空，此时渠道挂载为未配置并直接进入死信而不重试。
 
 ## 阶段 1 启动
 
@@ -19,3 +19,4 @@
 - BFF 将 nonce、会话元数据与本轮缓冲保存在进程内存。多副本部署需要 Redis nonce 与 `nilm_conversation` 持久化；详见 service 的已知限制。
 - mTLS 与 `nilm_security_audit` 持久化尚未包含在阶段 1 BFF 中。
 - `mysql2` 是 `@deepseek-ai/dsh-nilm-source` 的可选 peer；部署镜像必须在 MySQL 探活或生产查询运行前安装兼容版本。
+- Sentinel 与 notify 已挂载，但 30 秒 SLO、真实 `SKIP LOCKED` 竞争与微信/企微/短信供应商联调仍需使用真实端点分阶段演练。

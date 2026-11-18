@@ -5,8 +5,10 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import type { AlertPage } from '@deepseek-ai/dsh-nilm-sentinel'
 import { Config, resolveConfig, type Config as NilmServiceConfig } from './config.ts'
-import { NilmHttpService } from './http.ts'
+import { NilmHttpService, type AlertListPage } from './http.ts'
 import { CordisNilmRuntime } from './runtime.ts'
 
 /** Cordis plugin name. */
@@ -24,11 +26,18 @@ export const inject = [
   'nilmTariff',
   'nilmAnalytics',
   'nilmSafety',
+  'nilmSentinel',
 ]
 
 export { Config }
 export type { Config as NilmServiceConfig }
-export { NilmHttpService, type AuditEvent, type NilmHttpServiceOptions } from './http.ts'
+export {
+  NilmHttpService,
+  type AlertApi,
+  type AlertListPage,
+  type AuditEvent,
+  type NilmHttpServiceOptions,
+} from './http.ts'
 export {
   AuthError,
   NonceStore,
@@ -58,6 +67,7 @@ export {
 export function apply(ctx: Context, config: NilmServiceConfig): void {
   const resolved = resolveConfig(config)
   const runtime = new CordisNilmRuntime(ctx, resolved)
+  const sentinel = ctx.get('nilmSentinel')
   const service = new NilmHttpService({
     config: resolved,
     runtime,
@@ -70,6 +80,12 @@ export function apply(ctx: Context, config: NilmServiceConfig): void {
       && ctx.get('agents') !== undefined
       && ctx.get('sessions') !== undefined,
     audit: event => { ctx.logger.warn(`nilm.security ${JSON.stringify(event)}`) },
+    ...(sentinel === undefined ? {} : {
+      alerts: {
+        list: async (caller: { tenantId: string; userRef: string }) => alertPageJson(await sentinel.alerts(caller)),
+        acknowledge: (caller: { tenantId: string; userRef: string }, eventId: string) => sentinel.acknowledge(caller, eventId),
+      },
+    }),
   })
   ctx.effect(() => {
     void service.start().then(
@@ -78,4 +94,32 @@ export function apply(ctx: Context, config: NilmServiceConfig): void {
     )
     return async () => { await service.close() }
   }, 'nilm-service.http')
+}
+
+/**
+ * Project a Sentinel alert page into the BFF's JSON wire values.
+ * @param page - caller-visible alert projections.
+ * @returns the page with optional diagnosis materialized as null.
+ */
+function alertPageJson(page: AlertPage): AlertListPage {
+  return {
+    alerts: page.alerts.map((alert): JsonValue => ({
+      id: alert.id,
+      severity: alert.severity,
+      status: alert.status,
+      ruleId: alert.ruleId,
+      scopeLevel: alert.scopeLevel,
+      scopeId: alert.scopeId,
+      scopeName: alert.scopeName,
+      metric: alert.metric,
+      value: alert.value,
+      threshold: alert.threshold,
+      unit: alert.unit,
+      detectedAt: alert.detectedAt,
+      occurredAt: alert.occurredAt,
+      finding: alert.finding,
+      agentDiagnosis: alert.agentDiagnosis ?? null,
+    })),
+    total: page.total,
+  }
 }

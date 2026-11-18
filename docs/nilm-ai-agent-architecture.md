@@ -1501,7 +1501,7 @@ Critical 卡片必须包含：发生点位、相别、越限值、发生时间�
 - **实时安全链路**：以 5 秒级增量轮询或 CDC 读取上游隐患表 `nilm_unsafe_record`，对新增记录做去重、分级与模板投递；目标是入库到触达 p95 < 30 秒。
 - **用能分析链路**：以 1~5 分钟窗口读取热库功率/设备状态，计算夜间基载偏离、设备长开、空载等；目标是发现后 1 分钟内生成告警，再异步请求 Agent 研判。
 
-v1 采用“水位线 + 增量字段”的轮询方案，前提是该上游表有可用的自增/时间字段与索引；若没有，需 DBA 评估增加 `(asset_id, record_time, record_id)` 或等价索引。`tenant_id` 是否直存尚未确认，检测器用租户到资产的映射做过滤；只有 DDL 确认存在该列时才加 `tenant_id` 条件。若后续接入 Debezium/Kafka CDC，检测器接口不变，只替换事件源。
+v1 采用“水位线 + 增量字段”的轮询方案，前提是该上游表有可用的自增/时间字段与索引；若没有，需 DBA 评估增加 `(asset_id, record_time, record_id)` 或等价索引。水位线 `(record_time, record_id)` 持久化在本项目 `nilm_sentinel_watermark`，重启后从未处理位置继续。`tenant_id` 是否直存尚未确认，检测器用租户到资产的映射做过滤；只有 DDL 确认存在该列时才加 `tenant_id` 条件。若后续接入 Debezium/Kafka CDC，检测器接口不变，只替换事件源。
 
 检测器不调用模型，状态保存在数据库/Redis：
 
@@ -1529,8 +1529,8 @@ v1 采用“水位线 + 增量字段”的轮询方案，前提是该上游表�
 
 状态：`detected → confirmed → notified → acknowledged → resolved`，另有 `suppressed` 与 `false_positive`。
 
-- `dedupe_key = tenant_id + rule_id + scope_id + metric + bucket_start`；同一键在抑制窗口内只产生一条通知。
-- 告警升级必须穿透抑制：例如 warning 持续 3 个窗口后升级为 critical，重新投递并记录 `escalated_from`。
+- `silence_key = tenant_id + rule_id + scope_id + metric` 用于跨窗口抑制；`dedupe_key` 在其后追加 `bucket_start`，用于每个窗口的幂等落库。抑制期内事件仍写 `nilm_alert_event`（`status=suppressed`），但不写 Outbox，保证可追溯。
+- 告警升级必须穿透抑制：例如 warning 连续 3 个窗口持续越限，且当前值高于前三个窗口的最大值，才升级为 critical；升级事件使用 `dedupe_key + ':escalated:critical'` 重新投递并记录 `escalated_from`。
 - 用户确认只改变状态与后续提醒节奏，不关闭检测；恢复后自动写 `resolved`。
 - 每条状态变更写 `nilm_alert_transition`，包含操作者、时间、原因、渠道。
 - Critical 告警默认同时尝试订阅消息与服务号；短信作为可配置兜底。短信发送必须受成本与频率上限约束。
@@ -1542,20 +1542,23 @@ v1 采用“水位线 + 增量字段”的轮询方案，前提是该上游表�
 | 字段 | 说明 |
 | :--- | :--- |
 | `id` | 通知任务 ID |
+| `notification_id` | 对外通知 ID；客户端按此去重 |
 | `tenant_id` / `user_ref` | 接收主体 |
-| `alert_id` | 关联告警；日报可为空 |
+| `event_id` / `report_id` | 关联告警或报告；二者至少一个 |
 | `channel` | `wx_subscribe`、`wx_template`、`wecom_webhook`、`sms` |
-| `template_id` / `payload_json` | 渠道模板与参数；payload 不含密钥 |
+| `template_id` / `payload_json` | 渠道模板与确定性参数；payload 不含密钥 |
+| `recipient_ciphertext` / `recipient_masked` | 加密接收方材料与掩码提示；不存明文 |
 | `dedupe_key` | 幂等键 |
 | `status` | `pending`、`sending`、`sent`、`failed`、`dead` |
-| `attempt_count` / `next_retry_at` | 重试控制 |
+| `attempt_count` / `max_attempts` / `next_retry_at` | 重试控制 |
+| `claimed_by` / `lease_expires_at` | 并发领取与租约 |
 | `provider_message_id` | 渠道返回的消息 ID |
 | `created_at` / `sent_at` / `last_error` | 审计与排障 |
 
 投递规则：
 
 - 领取任务使用 `SELECT ... FOR UPDATE SKIP LOCKED` 或等价租约，避免多 worker 重复发送。
-- 指数退避：1 min、5 min、15 min、1 h；超过上限进入死信并告警运维。
+- 退避使用显式表 `[1 min, 5 min, 15 min, 1 h]`，之后保持 1 h；达到 `max_attempts`（默认 5）进入死信并告警运维。
 - 渠道返回“用户未授权/模板过期”时不重试，标记 `dead` 并提示运营补授权。
 - 发送成功写本项目 `nilm_notification_record`（需求文档中的 `log_notification_record` 在本项目中采用此逻辑名），保留至少 180 天。
 - 每条通知有 `dedupe_key`；渠道侧不支持幂等时，客户端按 `notification_id` 去重展示。
@@ -1567,7 +1570,7 @@ Agent 只做“解释与建议”，不决定是否告警：
 - Sentinel 写告警后，发布 `alert.enrich` 任务；worker 调用 Agent 服务，使用内部系统上下文与租户范围，创建短生命周期 Session。
 - 研判输入只包含已确认的事实、规则、阈值、数据质量与历史同类事件，不包含其他租户数据。
 - 研判超时 8 s；超时或模型失败时保留模板文案，告警仍然有效。
-- 研判结果写 `nilm_alert_enrichment`，包含模型、提示词版本、事实哈希、生成时间；通知器可在用户查看详情时再取。
+- 研判结果回填 `nilm_alert_event.agent_diagnosis`、`agent_model`、`agent_prompt_version` 与 `agent_generated_at`；只使用条件更新，告警已确认或终结时不覆盖，迟到的模型结果直接丢弃。
 - 不允许 Agent 修改告警级别或关闭告警；这些动作只由规则引擎或人工完成。
 
 ### 8.6 定时报告

@@ -553,6 +553,8 @@
     { "path": "./packages/nilm/core" },
     { "path": "./packages/nilm/prompt" },
     { "path": "./packages/nilm/safety" },
+    { "path": "./packages/nilm/sentinel" },
+    { "path": "./packages/nilm/notify" },
     { "path": "./packages/nilm/service" },
     { "path": "./packages/nilm/source" },
     { "path": "./packages/nilm/tariff" },

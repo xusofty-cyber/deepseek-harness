@@ -9,8 +9,8 @@
   en: 0c9d4cdce71a5ecd
   zh: 5e8ed4c2029c2783
 /deepseek-ai-dsh-nilm-service/endpoints:
-  en: e5e49ad77badbd8c
-  zh: b4a196901e96ea1a
+  en: 402a8551914e05e7
+  zh: 79183aec1792c92b
 /deepseek-ai-dsh-nilm-service/caller-envelope:
   en: fbebec126df59e3a
   zh: 4e613c3c08f3c70a
@@ -18,5 +18,5 @@
   en: b0372efd27497f10
   zh: 98960eac096d2833
 /deepseek-ai-dsh-nilm-service/known-limitations-and-deferred-work:
-  en: 39b7b37fea81a059
-  zh: f55336905030a7c9
+  en: 62b21e0238e808b7
+  zh: be78c61b045b3300

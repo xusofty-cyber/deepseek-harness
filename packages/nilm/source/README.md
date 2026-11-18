@@ -12,7 +12,7 @@ Defaults: 3306 for both MySQL ports, 10 connections per pool, 3 seconds for a TD
 
 ## Extension points
 
-`SourceDependencies` injects each executor or transport so tests and alternate deployment drivers can replace a live endpoint. `ctx.nilmSource` exposes guarded MySQL reads (`queryLocalReadOnly`, `queryUpstreamReadOnly`, `listLocalTables`), internally generated TDengine reads (`queryHot`, `queryStats`), the fixed-template cold query (`queryCold`), `probe`, and `close`. The TDengine methods are for domain adapters such as `nilm-timeseries`; model-facing tools never receive SQL text.
+`SourceDependencies` injects each executor or transport so tests and alternate deployment drivers can replace a live endpoint. `ctx.nilmSource` exposes guarded MySQL reads (`queryLocalReadOnly`, `queryUpstreamReadOnly`, `listLocalTables`), the project write transaction (`transaction`), internally generated TDengine reads (`queryHot`, `queryStats`), the fixed-template cold query (`queryCold`), `probe`, and `close`. The TDengine methods are for domain adapters such as `nilm-timeseries`; model-facing tools never receive SQL text.
 
 `mysql2` is an optional peer so the core package can be installed without a native/driver resolution during composition; the deployment image must provide `mysql2@^3.11.0` before the MySQL probe or a production query runs.
 

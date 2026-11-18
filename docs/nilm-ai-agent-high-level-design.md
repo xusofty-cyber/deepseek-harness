@@ -182,10 +182,11 @@ dsh Session 采用单写者所有权，横向扩展必须显式处理：
 | `nilm_turn_log` | 轮次审计、幂等与延迟 | 必需 |
 | `nilm_security_audit` | Tool/SQL/越权/通知审计 | 必需 |
 | `nilm_alert_rule` | 规则配置与版本 | 必需 |
-| `nilm_alert_event` | 告警事件、去重、确认与诊断 | 必需 |
+| `nilm_alert_event` | 告警事件、跨窗口静默、去重、确认与诊断 | 必需 |
 | `nilm_alert_transition` | 告警状态流转审计 | 必需 |
 | `nilm_notification_outbox` | 可靠投递队列 | 必需 |
 | `nilm_notification_record` | 渠道投递审计（需求中的 `log_notification_record`） | 必需 |
+| `nilm_sentinel_watermark` | 上游增量读取水位线 `(source, record_time, record_id)` | 必需 |
 | `nilm_job_run` | 定时任务执行与幂等 | 必需 |
 | `nilm_report` | 晨报/力调报告的结构化结果 | 必需 |
 | `nilm_tariff_plan` / `nilm_tariff_period` | 电价方案与分时时段 | 必需 |
@@ -310,6 +311,7 @@ CREATE TABLE `nilm_alert_event` (
   `threshold_value` DECIMAL(12, 4) DEFAULT NULL,
   `unit` VARCHAR(16) NOT NULL,
   `bucket_start` DATETIME NOT NULL COMMENT '去重时间桶起点',
+  `silence_key` VARCHAR(191) NOT NULL COMMENT 'tenant_id+rule_id+scope_id+metric，跨窗口抑制',
   `dedupe_key` VARCHAR(191) NOT NULL COMMENT 'tenant_id+rule_id+scope_id+metric+bucket_start',
   `raw_event_time` DATETIME NOT NULL COMMENT '上游事件或采样时间',
   `detected_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -329,8 +331,17 @@ CREATE TABLE `nilm_alert_event` (
   UNIQUE KEY `uk_event_id` (`event_id`),
   UNIQUE KEY `uk_tenant_dedupe` (`tenant_id`, `dedupe_key`),
   KEY `idx_tenant_status` (`tenant_id`, `status`, `created_at`),
-  KEY `idx_tenant_rule_bucket` (`tenant_id`, `rule_id`, `bucket_start`)
+  KEY `idx_tenant_rule_bucket` (`tenant_id`, `rule_id`, `bucket_start`),
+  KEY `idx_tenant_silence_bucket` (`tenant_id`, `silence_key`, `bucket_start`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='告警事件';
+
+CREATE TABLE `nilm_sentinel_watermark` (
+  `source_name` VARCHAR(64) NOT NULL COMMENT '增量源标识，如 upstream_unsafe',
+  `record_time` DATETIME NOT NULL COMMENT '已处理记录的事件时间',
+  `record_id` VARCHAR(128) NOT NULL COMMENT '同一事件时间内的稳定排序ID',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`source_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上游增量读取水位线';
 
 CREATE TABLE `nilm_notification_outbox` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -946,8 +957,8 @@ canonical = METHOD + "\n" + PATH + "\n" + lowerhex(sha256(body)) + "\n" +
 | `POST` | `/v1/conversations` | 新开会话；服务端签发 `conversationId` | `201 Created` |
 | `GET` | `/v1/conversations` | 当前用户会话列表与最近摘要 | `200 OK` |
 | `GET` | `/v1/conversations/{id}/messages` | 历史消息分页 | `200 OK` |
-| `GET` | `/v1/alerts` | 告警列表与详情；阶段 1 返回空且不可用的骨架 | `200 OK` |
-| `POST` | `/v1/alerts/{id}/ack` | 确认/忽略告警；写审计，不控制设备；阶段 1 返回 `DATA_UNAVAILABLE` | `503` |
+| `GET` | `/v1/alerts` | 按调用方返回最近告警列表与确定性摘要；未挂载 Sentinel 时返回 `available: false` 的空骨架 | `200 OK` |
+| `POST` | `/v1/alerts/{id}/ack` | 确认/忽略告警；写 `nilm_alert_transition` 与审计，不控制设备；未挂载 Sentinel 时返回 `DATA_UNAVAILABLE` | `200 OK` / `503` |
 | `GET` | `/healthz`、`/readyz` | 存活与就绪 | `200/503` |
 
 所有资源读取都必须按 `tenant_id + user_ref` 过滤；`turnId`、`conversationId`、`alertId` 只是资源标识，不是授权凭证。跨用户或跨租户访问返回 `SCOPE_FORBIDDEN`，不泄露资源是否存在。
@@ -1022,7 +1033,7 @@ SSE 规则：
 - **nonce 为单进程内存**：多副本部署时各副本的 nonce 缓存不共享，必须替换为 Redis 才能满足全局防重放。
 - **会话元数据为单进程内存**：`nilm_conversation` 尚未接入；重启后丢失会话列表与 `session_id -> shard_id` 映射。单副本阶段可用，扩容前必须持久化。
 - **审计未落库**：安全审计当前写结构化日志；`nilm_security_audit` 表写入随审计存储集成交付。
-- **告警为空骨架**：`GET /v1/alerts` 明确返回 `available: false`，确认接口返回 `DATA_UNAVAILABLE`，不伪造告警数据。
+- **告警空骨架保留为降级路径**：阶段 3 的 Sentinel 已挂载时，`GET /v1/alerts` 返回 `available: true` 与按调用方过滤的告警；只有 Sentinel 未挂载时才返回 `available: false`，确认接口则返回 `DATA_UNAVAILABLE`，不伪造告警数据。
 
 ---
 
@@ -1081,10 +1092,10 @@ sequenceDiagram
 
 状态：`detected → confirmed → notified → acknowledged → resolved`，另有 `suppressed` 与 `false_positive`。
 
-- `dedupe_key = tenant_id + rule_id + scope_id + metric + bucket_start`；同一键在抑制窗口内只产生一条通知。
+- `silence_key = tenant_id + rule_id + scope_id + metric` 用于跨窗口抑制；`dedupe_key` 追加 `bucket_start`，用于每个窗口的幂等落库与去重。抑制期内事件仍以 `status=suppressed` 写入 `nilm_alert_event`，但不写 Outbox。
 - 告警事件与 Outbox 在同一事务写入，避免“有事件没通知”。
 - 同一 `dedupe_key` 的并发写入由唯一键兜底；重复事件只更新诊断或状态，不重复入队。
-- 告警升级必须穿透抑制：warning 连续 3 个窗口升级为 critical，更新原事件严重度并写 transition；Outbox 用 `dedupe_key + ':escalated:' + severity` 生成新通知，不重复插入同一事件。
+- 告警升级必须穿透抑制：warning 连续 3 个 bucket 均越限，且当前值高于前三个窗口的最大值，才升级为 critical；Outbox 用基础键 + `:escalated:critical` 生成新通知并写 transition，不重复插入同一事件。安全类规则（R-03/R-04/R-05）不进入静默窗口。
 - 用户确认只改变状态与后续提醒节奏，不关闭检测；恢复后自动写 `resolved`。
 - `notified` 表示至少一个渠道成功；各渠道结果分别记录在 Outbox 与 `nilm_notification_record`，不用一个渠道失败覆盖已成功的渠道。
 - 每条状态变更写 `nilm_alert_transition`，包含操作者、时间、原因、渠道。
@@ -1095,7 +1106,7 @@ sequenceDiagram
 
 - 领取任务使用 `SELECT ... FOR UPDATE SKIP LOCKED` 或等价租约；设置 `claimed_by` 与 `lease_expires_at`，租约 60 秒。
 - `nilm-notifier` 每 2~5 秒轮询一次，Critical 任务优先领取；渠道调用设置独立超时，避免单条慢请求拖住整批。
-- 指数退避：1 分钟、5 分钟、15 分钟、1 小时；超过 `max_attempts` 进入 `dead` 并告警运维。
+- 退避使用显式表：1 分钟、5 分钟、15 分钟、1 小时，之后保持 1 小时；达到 `max_attempts` 进入 `dead` 并告警运维。
 - 渠道返回“用户未授权/模板过期”时不重试，标记 `dead` 并提示运营补授权。
 - 发送成功写 `nilm_notification_record`，保留至少 180 天；客户端按 `notification_id` 去重展示。
 - 渠道枚举固定为 `wx_subscribe`、`wx_template`、`wecom_webhook`、`sms`，与 `nilm_alert_rule.notify_channels_json` 一致。
@@ -1106,7 +1117,7 @@ sequenceDiagram
 
 ### 7.5 Agent 异步研判
 
-Agent 只做“解释与建议”，不决定是否告警：Sentinel 写告警后发布 `alert.enrich` 任务；`nilm-agent` 的 enrich worker 创建短生命周期 Session，输入只包含已确认事实、规则、阈值、数据质量与历史同类事件，不包含其他租户数据。研判超时 8 秒；超时或模型失败时保留模板文案，告警仍然有效。结果写 `nilm_alert_event.agent_diagnosis` 与模型/提示词版本字段，不修改告警级别、不关闭告警。
+Agent 只做“解释与建议”，不决定是否告警：Sentinel 事务提交后发布 `nilm/alert/created`，`nilm-notify` 的 enrich worker 用租户绑定的短生命周期 Session 生成诊断。输入只包含已确认事实、规则、阈值、数据质量与历史同类事件，不包含其他租户数据，也不暴露工具。研判硬超时 8 秒；超时或模型失败时保留模板文案，告警仍然有效。结果以条件更新回填 `nilm_alert_event.agent_diagnosis` 与模型/提示词版本字段；告警已确认或终结时不覆盖，迟到的结果丢弃，不修改告警级别、不关闭告警。
 
 ### 7.6 定时报告与力调预测
 
@@ -1126,6 +1137,18 @@ Agent 只做“解释与建议”，不决定是否告警：Sentinel 写告警�
 4. 任务执行结果写 `nilm_job_run`；同一租户同一天只执行一次。
 
 数据质量巡检（R-08）每日低峰期检查覆盖率、父子计量偏差、冷热库一致性；失败写运维告警，不发给客户。
+
+### 7.7 阶段 3 实现状态与边界
+
+阶段 3 已实现 `nilm-sentinel` 的 R-01a/R-01b/R-02/R-03/R-04/R-05、告警状态机、跨窗口抑制与升级、事务化 Outbox 入队，以及 `nilm-notify` 的 Outbox 调度、四渠道网关契约、显式退避与 8 秒异步富化。BFF 的 `/v1/alerts` 与确认接口已接入 Sentinel，并在未挂载时保留显式不可用降级。
+
+仍属阶段 4 或现场验证的内容：
+
+- R-06 力调风险、R-07 每日晨报、R-08 数据质量巡检和 `nilm-scheduler` 尚未实现。
+- 30 秒端到端 SLO、真实 MySQL `SKIP LOCKED` 多进程抢占、微信/企微/短信供应商联调必须用真实环境演练，离线单测不能替代签署结论。
+- 短信供应商仍待 D-12；当前只有渠道契约与 Mock/未配置降级。
+- 上游增量索引 `(asset_id, record_time, record_id)` 的 DBA 评估仍开放；若索引不可用，扫描器不能承诺 5 秒时效。
+- R-01b 当前使用 `nilm_tenant_config.baseline_kw`，按同租户、同星期、同时间段自动计算过去 4 周中位数仍属延期工作。R-03 当前只由上游隐患分类触发，实时功率过载判定未实现。R-04 在分相电流列可用前保持停用，不做估算。
 
 ---
 

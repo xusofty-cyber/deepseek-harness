@@ -38,6 +38,17 @@ export interface Mysql2Module {
 export interface Mysql2Pool {
   query(sql: string, params: readonly unknown[]): Promise<[unknown, unknown]>
   end(): Promise<void>
+  /** Acquire one connection for a transaction; absent on read-only test doubles. */
+  getConnection?(): Promise<Mysql2Connection>
+}
+
+/** One pooled connection with explicit transaction control. */
+export interface Mysql2Connection {
+  query(sql: string, params: readonly unknown[]): Promise<[unknown, unknown]>
+  beginTransaction(): Promise<void>
+  commit(): Promise<void>
+  rollback(): Promise<void>
+  release(): void
 }
 
 /** Lazy loader for the optional driver; tests inject a fake module. */

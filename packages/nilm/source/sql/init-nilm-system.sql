@@ -152,6 +152,7 @@ CREATE TABLE `nilm_alert_event` (
   `threshold_value` DECIMAL(12, 4) DEFAULT NULL,
   `unit` VARCHAR(16) NOT NULL,
   `bucket_start` DATETIME NOT NULL COMMENT '去重时间桶起点',
+  `silence_key` VARCHAR(191) NOT NULL COMMENT 'tenant_id+rule_id+scope_id+metric，跨窗口抑制键',
   `dedupe_key` VARCHAR(191) NOT NULL COMMENT 'tenant_id+rule_id+scope_id+metric+bucket_start',
   `raw_event_time` DATETIME NOT NULL COMMENT '上游事件或采样时间',
   `detected_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -170,6 +171,7 @@ CREATE TABLE `nilm_alert_event` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_event_id` (`event_id`),
   UNIQUE KEY `uk_tenant_dedupe` (`tenant_id`, `dedupe_key`),
+  KEY `idx_tenant_silence_bucket` (`tenant_id`, `silence_key`, `bucket_start`),
   KEY `idx_tenant_status` (`tenant_id`, `status`, `created_at`),
   KEY `idx_tenant_rule_bucket` (`tenant_id`, `rule_id`, `bucket_start`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='告警事件';
@@ -233,6 +235,14 @@ CREATE TABLE `nilm_notification_record` (
   UNIQUE KEY `uk_tenant_notification_channel` (`tenant_id`, `notification_id`, `channel`),
   KEY `idx_tenant_time` (`tenant_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='渠道投递审计；保留至少180天';
+
+CREATE TABLE `nilm_sentinel_watermark` (
+  `source_name` VARCHAR(64) NOT NULL COMMENT '增量事件源名称，如 upstream_unsafe',
+  `record_time` DATETIME NOT NULL COMMENT '已处理记录的事件时间',
+  `record_id` VARCHAR(128) NOT NULL COMMENT '同一事件时间内的稳定排序ID',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`source_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Sentinel 增量扫描水位线';
 
 CREATE TABLE `nilm_job_run` (
   `job_run_id` VARCHAR(64) NOT NULL,

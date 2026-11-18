@@ -106,6 +106,41 @@
     - id: nilm-tools
       name: '@deepseek-ai/dsh-nilm-tools'
 
+    - id: nilm-sentinel
+      name: '@deepseek-ai/dsh-nilm-sentinel'
+      config:
+        pollIntervalMs: !!js Number(process.env.NILM_SENTINEL_POLL_MS ?? 5000)
+        energyIntervalMs: !!js Number(process.env.NILM_SENTINEL_ENERGY_MS ?? 60000)
+        bucketMinutes: !!js Number(process.env.NILM_SENTINEL_BUCKET_MINUTES ?? 5)
+        batchSize: !!js Number(process.env.NILM_SENTINEL_BATCH_SIZE ?? 200)
+        escalateAfterWindows: !!js Number(process.env.NILM_SENTINEL_ESCALATE_WINDOWS ?? 3)
+        maxAttempts: !!js Number(process.env.NILM_NOTIFY_MAX_ATTEMPTS ?? 5)
+        templates: !!js JSON.parse(process.env.NILM_ALERT_TEMPLATES ?? '{}')
+        nominalVoltageV: !!js Number(process.env.NILM_SENTINEL_NOMINAL_VOLTAGE ?? 220)
+
+    - id: nilm-notify
+      name: '@deepseek-ai/dsh-nilm-notify'
+      config:
+        pollIntervalMs: !!js Number(process.env.NILM_NOTIFY_POLL_MS ?? 2000)
+        batchSize: !!js Number(process.env.NILM_NOTIFY_BATCH_SIZE ?? 20)
+        leaseMs: !!js Number(process.env.NILM_NOTIFY_LEASE_MS ?? 60000)
+        channelTimeoutMs: !!js Number(process.env.NILM_NOTIFY_CHANNEL_TIMEOUT_MS ?? 10000)
+        retentionDays: !!js Number(process.env.NILM_NOTIFY_RETENTION_DAYS ?? 180)
+        wxSubscribeUrl: !!js process.env.NILM_WX_SUBSCRIBE_URL
+        wxSubscribeToken: !!js process.env.NILM_WX_SUBSCRIBE_TOKEN
+        wxTemplateUrl: !!js process.env.NILM_WX_TEMPLATE_URL
+        wxTemplateToken: !!js process.env.NILM_WX_TEMPLATE_TOKEN
+        wecomWebhookUrl: !!js process.env.NILM_WECOM_WEBHOOK_URL
+        wecomWebhookToken: !!js process.env.NILM_WECOM_WEBHOOK_TOKEN
+        smsUrl: !!js process.env.NILM_SMS_URL
+        smsToken: !!js process.env.NILM_SMS_TOKEN
+        enrichProvider: !!js process.env.NILM_ENRICH_PROVIDER ?? 'deepseek-official'
+        enrichModel: !!js process.env.NILM_ENRICH_MODEL
+        enrichPromptVersion: !!js process.env.NILM_ENRICH_PROMPT_VERSION ?? 'alert-enrich-v1'
+        enrichTimeoutMs: !!js Number(process.env.NILM_ENRICH_TIMEOUT_MS ?? 8000)
+        enrichConcurrency: !!js Number(process.env.NILM_ENRICH_CONCURRENCY ?? 2)
+        enrichCwd: !!js process.env.NILM_ENRICH_CWD ?? process.cwd()
+
     - id: nilm-service
       name: '@deepseek-ai/dsh-nilm-service'
       config:

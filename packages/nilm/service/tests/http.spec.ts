@@ -1,10 +1,10 @@
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'node:http'
 import { describe, expect, it } from 'vitest'
-import type { CallContext } from '@deepseek-ai/dsh-nilm-core'
+import { NilmError, type CallContext } from '@deepseek-ai/dsh-nilm-core'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { canonicalRequest, createSignature } from '../src/auth.ts'
 import { resolveConfig } from '../src/config.ts'
-import { NilmHttpService, type NilmHttpRequest, type NilmHttpResponse } from '../src/http.ts'
+import { NilmHttpService, type AlertApi, type NilmHttpRequest, type NilmHttpResponse } from '../src/http.ts'
 import type {
   ChatMessage,
   NilmAgentEvent,
@@ -194,7 +194,7 @@ function parseSse(body: string): Array<{ id?: number; event: string; data: JsonV
   })
 }
 
-function newService(runtime: FakeRuntime): NilmHttpService {
+function newService(runtime: FakeRuntime, alerts?: AlertApi): NilmHttpService {
   return new NilmHttpService({
     config: resolveConfig({
       port: 0,
@@ -209,6 +209,7 @@ function newService(runtime: FakeRuntime): NilmHttpService {
     runtime,
     ready: () => true,
     now: () => NOW,
+    ...(alerts === undefined ? {} : { alerts }),
   })
 }
 
@@ -361,5 +362,105 @@ describe('NILM BFF HTTP/SSE', () => {
     } finally {
       await service.close()
     }
+  })
+})
+
+describe('NILM BFF alerts', () => {
+  it('keeps the explicit unavailable skeleton when no Sentinel is mounted', async () => {
+    const service = newService(new FakeRuntime())
+
+    const response = await call(service, 'GET', '/v1/alerts', Buffer.alloc(0), TENANT_A, SECRET_A)
+
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({ alerts: [], total: 0, available: false })
+  })
+
+  it('projects caller-visible alerts from the mounted Sentinel', async () => {
+    const calls: Array<{ tenantId: string; userRef: string }> = []
+    const alerts: AlertApi = {
+      list: async caller => {
+        calls.push(caller)
+        return {
+          alerts: [{
+            id: 'alert_1',
+            severity: 'warning',
+            status: 'confirmed',
+            finding: '夜间基载偏高',
+            agentDiagnosis: null,
+          }],
+          total: 1,
+        }
+      },
+      acknowledge: async () => 'acknowledged',
+    }
+    const service = newService(new FakeRuntime(), alerts)
+
+    const response = await call(service, 'GET', '/v1/alerts', Buffer.alloc(0), TENANT_A, SECRET_A)
+
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({
+      alerts: [{
+        id: 'alert_1',
+        severity: 'warning',
+        status: 'confirmed',
+        finding: '夜间基载偏高',
+        agentDiagnosis: null,
+      }],
+      total: 1,
+      available: true,
+    })
+    expect(calls).toEqual([{ tenantId: TENANT_A, userRef: 'user-1' }])
+  })
+
+  it('acknowledges an alert and audits the outcome', async () => {
+    const events: string[] = []
+    const seen: Array<{ caller: { tenantId: string; userRef: string }; eventId: string }> = []
+    const service = new NilmHttpService({
+      config: resolveConfig({
+        port: 0,
+        sessionCwd: '/tmp',
+        model: 'deepseek-chat',
+        signingSecrets: { [TENANT_A]: SECRET_A },
+      }),
+      runtime: new FakeRuntime(),
+      ready: () => true,
+      now: () => NOW,
+      audit: event => events.push(event.type),
+      alerts: {
+        list: async () => ({ alerts: [], total: 0 }),
+        acknowledge: async (caller, eventId) => {
+          seen.push({ caller, eventId })
+          return 'acknowledged'
+        },
+      },
+    })
+
+    const response = await call(service, 'POST', '/v1/alerts/alert_1/ack', Buffer.alloc(0), TENANT_A, SECRET_A)
+
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({ status: 'acknowledged' })
+    expect(seen).toEqual([{ caller: { tenantId: TENANT_A, userRef: 'user-1' }, eventId: 'alert_1' }])
+    expect(events).toContain('alert.acknowledged')
+  })
+
+  it('does not reveal an alert owned by another caller', async () => {
+    const service = newService(new FakeRuntime(), {
+      list: async () => ({ alerts: [], total: 0 }),
+      acknowledge: async () => { throw new NilmError('SCOPE_NOT_FOUND', 'alert event not found for this caller') },
+    })
+
+    const response = await call(service, 'POST', '/v1/alerts/alert_1/ack', Buffer.alloc(0), TENANT_A, SECRET_A)
+
+    expect(response.status).toBe(404)
+    expect(JSON.parse(response.body)).toMatchObject({ code: 'SCOPE_NOT_FOUND' })
+  })
+
+  it('returns DATA_UNAVAILABLE when acknowledgement is requested without a mount', async () => {
+    const service = newService(new FakeRuntime())
+
+    const response = await call(service, 'POST', '/v1/alerts/alert_1/ack', Buffer.alloc(0), TENANT_A, SECRET_A)
+
+    expect(response.status).toBe(503)
+    expect(JSON.parse(response.body)).toMatchObject({ code: 'DATA_UNAVAILABLE' })
   })
 })

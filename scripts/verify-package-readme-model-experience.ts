@@ -50,6 +50,8 @@ const NO_MODEL_EXPERIENCE_SECTION: Readonly<Record<string, string>> = {
   'packages/nilm/timeseries': 'The package only routes and bounds already authorized timeseries reads; model-facing tools own summaries, charts, and result rendering.',
   'packages/nilm/tariff': 'The package only validates plans and splits ranges into priced slices; model-facing tools and the BFF own summaries, authorization, and result rendering.',
   'packages/nilm/analytics': 'The package only performs deterministic calculations over caller-supplied values; model-facing consumers own authorization, summaries, and result rendering.',
+  'packages/nilm/sentinel': 'The package evaluates deterministic rules and writes alerts; the model is never asked whether to alert and its diagnosis is a separate notify-owned enrichment.',
+  'packages/nilm/notify': 'The package delivers persisted alerts and conditionally stores a model-authored diagnosis; it never adds model-visible input to a conversation.',
   'packages/nilm/service': 'The BFF verifies callers and transports turns; the mounted prompt and tool plugins own every model-visible contribution.',
   'packages/bundle/nilm-app': 'The package is a static Cordis composition and startup guard; mounted plugins own model context.',
 }

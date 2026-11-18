@@ -15,6 +15,7 @@ import {
   NILM_UPSTREAM_TABLES,
 } from './sql-guard.ts'
 import { HttpTdengineExecutor, type TdengineExecutor } from './tdengine.ts'
+import { MysqlTransactionRunner, type SqlTransaction, type SqlTransactionRunner } from './transaction.ts'
 
 export { Config, loadSourceConfigFromEnv, SOURCE_ENV } from './config.ts'
 export type { MysqlEndpointConfig } from './config.ts'
@@ -28,6 +29,8 @@ export { ColdProxyClient, HttpColdProxyTransport } from './cold-proxy.ts'
 export type { ColdProxyTransport, ColdQueryRequest } from './cold-proxy.ts'
 export { MysqlExecutor } from './mysql.ts'
 export type { SqlExecutor } from './mysql.ts'
+export { MysqlTransactionRunner } from './transaction.ts'
+export type { SqlTransaction, SqlTransactionRunner } from './transaction.ts'
 export { HttpTdengineExecutor } from './tdengine.ts'
 export type { TdengineExecutor } from './tdengine.ts'
 
@@ -35,6 +38,8 @@ export type { TdengineExecutor } from './tdengine.ts'
 export interface SourceDependencies {
   /** Project MySQL executor. */
   localMysql?: SqlExecutor
+  /** Project MySQL transaction runner used by Sentinel and the Outbox dispatcher. */
+  localTransactions?: SqlTransactionRunner
   /** Upstream read-only MySQL executor. */
   upstreamMysql?: SqlExecutor
   /** Hot TDengine executor. */
@@ -79,11 +84,13 @@ export class NilmSourceService extends Service {
   static Config = Config
 
   private readonly local: SqlExecutor
+  private readonly localTransactions: SqlTransactionRunner
   private readonly upstream: SqlExecutor
   private readonly hot: TdengineExecutor
   private readonly stats: TdengineExecutor
   private readonly cold: ColdProxyClient
   private readonly owned: SqlExecutor[]
+  private readonly ownedTransactions: SqlTransactionRunner[]
   private closed = false
 
   /**
@@ -94,7 +101,12 @@ export class NilmSourceService extends Service {
   constructor(ctx: Context, private readonly config: Config, dependencies: SourceDependencies = {}) {
     super(ctx, 'nilmSource')
     const owned: SqlExecutor[] = []
+    const ownedTransactions: SqlTransactionRunner[] = []
     this.local = dependencies.localMysql ?? own(owned, new MysqlExecutor({ ...config.localMysql, connectionLimit: config.mysqlConnectionLimit }))
+    this.localTransactions = dependencies.localTransactions ?? ownTransaction(
+      ownedTransactions,
+      new MysqlTransactionRunner({ ...config.localMysql, connectionLimit: config.mysqlConnectionLimit }),
+    )
     this.upstream = dependencies.upstreamMysql ?? own(owned, new MysqlExecutor({ ...config.upstreamMysql, connectionLimit: config.mysqlConnectionLimit }))
     this.hot = dependencies.tdengineHot ?? new HttpTdengineExecutor(
       config.tdengineHotUrl,
@@ -113,6 +125,7 @@ export class NilmSourceService extends Service {
       config.coldProxyTimeoutMs,
     )
     this.owned = owned
+    this.ownedTransactions = ownedTransactions
     ctx.effect(() => () => this.close())
   }
 
@@ -125,6 +138,18 @@ export class NilmSourceService extends Service {
    */
   async queryLocalReadOnly<T>(sql: string, params: readonly unknown[] = [], signal?: AbortSignal): Promise<T[]> {
     return this.run('local', this.local, assertReadOnlySql(sql, [...NILM_LOCAL_TABLES, INFORMATION_SCHEMA_TABLES]), params, signal)
+  }
+
+  /**
+   * Run project-owned writes inside one MySQL transaction. The transaction
+   * handle is never reachable from model-facing tools; callers own the fixed
+   * statements and parameter binding.
+   * @param body - statements to run with the transaction handle.
+   * @returns the callback result after commit.
+   */
+  async transaction<T>(body: (tx: SqlTransaction) => Promise<T>): Promise<T> {
+    if (this.closed) throw new NilmSourceError('SOURCE_UNAVAILABLE', 'local source is closed')
+    return this.localTransactions.transaction(body)
   }
 
   /**
@@ -245,7 +270,10 @@ export class NilmSourceService extends Service {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
-    await Promise.allSettled(this.owned.map(executor => executor.close()))
+    await Promise.allSettled([
+      ...this.owned.map(executor => executor.close()),
+      ...this.ownedTransactions.map(runner => runner.close()),
+    ])
   }
 
   private async run<T>(
@@ -274,6 +302,17 @@ export class NilmSourceService extends Service {
 function own<T extends SqlExecutor>(owned: SqlExecutor[], executor: T): T {
   owned.push(executor)
   return executor
+}
+
+/**
+ * Track a transaction runner owned by this service.
+ * @param owned - runner list released on close.
+ * @param runner - runner created by this service.
+ * @returns the same runner.
+ */
+function ownTransaction<T extends SqlTransactionRunner>(owned: SqlTransactionRunner[], runner: T): T {
+  owned.push(runner)
+  return runner
 }
 
 /**

@@ -60,7 +60,7 @@ flowchart LR
      - 实现 `NilmContextService`（`bind(agentId, callContext)`, `require(agentId)`, `revoke(agentId)`）；
      - 确保上下文仅驻留在进程内存映射表中，严禁通过 Tool 参数或 Session JSONL 传递。
 3. **本地持久化库与上游只读适配器（L1 包）**：
-   - 初始化本地 MySQL `nilm_system` 数据库，执行 DDL 脚本创建 **17 张**核心业务与审计表，与概要设计 §2 一致：`nilm_tenant_config`、`nilm_asset_snapshot`、`nilm_measurement_binding`、`nilm_conversation`、`nilm_turn_log`、`nilm_security_audit`、`nilm_alert_rule`、`nilm_alert_event`、`nilm_alert_transition`、`nilm_notification_outbox`、`nilm_notification_record`、`nilm_job_run`、`nilm_report`、`nilm_tariff_plan`、`nilm_tariff_period`、`nilm_calendar_day`、`nilm_pf_policy`；
+   - 初始化本地 MySQL `nilm_system` 数据库，执行 DDL 脚本创建 **18 张**核心业务与审计表，与概要设计 §2 一致：`nilm_tenant_config`、`nilm_asset_snapshot`、`nilm_measurement_binding`、`nilm_conversation`、`nilm_turn_log`、`nilm_security_audit`、`nilm_alert_rule`、`nilm_alert_event`、`nilm_alert_transition`、`nilm_notification_outbox`、`nilm_notification_record`、`nilm_sentinel_watermark`、`nilm_job_run`、`nilm_report`、`nilm_tariff_plan`、`nilm_tariff_period`、`nilm_calendar_day`、`nilm_pf_policy`；
    - 创建 `packages/nilm/source/`：
      - **上游 MySQL 仓储**：基于 `mysql2/promise` 封装只读连接池；主机、端口、库名、账号与密码全部由 `NILM_UPSTREAM_MYSQL_*` 环境变量或 K8s Secret 注入，仓库与文档不保存固定值；实现 SELECT 白名单检查、强制参数化查询，并要求上游账号本身为只读权限；
      - **上游 TDengine 热库仓储**：基于 REST/WebSocket 封装客户端，连接串由 `NILM_UPSTREAM_TDENGINE_HOT_URL` 注入，库名 `tpim_system`；实现秒级/分钟级核心超表（`nilmdc_realtime_data`、`nilmdc_energy_data`、`nilmdc_appliance_identification` 等）的时序数据提取；
@@ -87,7 +87,7 @@ flowchart LR
 
 | 验证项 | 验证方法与执行命令 | 预期通过标准（证据门） |
 | :--- | :--- | :--- |
-| **G0-1: 真实数据库连通性验证** | 执行本阶段新增的探测脚本 `pnpm --filter @deepseek-ai/dsh-nilm-source test:connectivity`（脚本列入交付物） | 用环境变量注入的连接串成功连接上游 MySQL；连接本地 `nilm_system` 并断言 17 张表存在；用热库连接断言 `nilmdc_realtime_data`、`nilmdc_energy_data`、`nilmdc_appliance_identification` 存在且可读；用统计库连接断言 `consum_energy_day_statistics_info` 存在且可读；冷代理 `NILM_COLD_PROXY_URL` 的受控模板探活通过；**不校验固定超表总数**；耗时 < 1000ms |
+| **G0-1: 真实数据库连通性验证** | 执行本阶段新增的探测脚本 `pnpm --filter @deepseek-ai/dsh-nilm-source test:connectivity`（脚本列入交付物） | 用环境变量注入的连接串成功连接上游 MySQL；连接本地 `nilm_system` 并断言 18 张表存在；用热库连接断言 `nilmdc_realtime_data`、`nilmdc_energy_data`、`nilmdc_appliance_identification` 存在且可读；用统计库连接断言 `consum_energy_day_statistics_info` 存在且可读；冷代理 `NILM_COLD_PROXY_URL` 的受控模板探活通过；**不校验固定超表总数**；耗时 < 1000ms |
 | **G0-2: 只读权限安全防护验证** | 执行单元测试，针对 `NilmSourceService` 尝试执行 `INSERT`、`UPDATE`、`DROP`、非白名单表查询与多语句拼接 | 应用层 SELECT-only 白名单拦截，抛出 `NilmSourceError('UNAUTHORIZED_SQL_OPERATION')`；同时用上游只读账号复验写操作被数据库拒绝；两条链路均通过，写操作成功数为 0 |
 | **G0-3: 生产沙箱工具白名单验证** | 启动容器后调用 `ctx.tools.schemas()` 枚举最终工具清单，并读取最终 Cordis 树断言禁止包不存在 | 不得出现 `bash`、`read_file`、`write_file`、`edit_file`、`web_search`、`subagent`、`mcp` 等危险工具；`deepseek-llm-api-extensions`、`session-log-deepseek`、`plugin-package-inventory-deepseek` 不在树中；默认只允许 `nilm_*`，基线运行必需的内部工具须逐项列入白名单并说明理由；断言结果写入测试日志 |
 | **G0-4: 假模型进程无损启动冒烟** | 配置虚拟 Dummy LLM Provider，执行 `pnpm dsh --profile nilm`（使用现有 CLI，不引入自定义启动参数）；阶段 0 尚未交付 BFF，不检查 `/healthz` | 所有硬注入满足、无未满足的 Context 依赖；进程能启动并响应一次最小 SDK 调用；收到 SIGTERM 后干净退出（exit code 0）；BFF 健康检查在阶段 1 交付 BFF 后补充 |
@@ -258,6 +258,21 @@ flowchart LR
 | **G3-4: 网络故障与分级退避重试** | 注入网络断网异常，观察 Outbox 任务状态流转 | 状态正确翻转为 `failed`，下次重试时间严格按 `[1m, 5m, 15m, 1h]` 分级退避递增；达到 `max_attempts` 后准确标记为 `dead` 并写入审计 |
 | **G3-5: 异步诊断非阻塞验证** | 人为将 Agent 响应时延注入为 10 秒（模拟大模型拥堵），enrich 硬超时仍为 8 秒 | 即时告警通知在 30 秒内发出（携带初始确定性模板）；8 秒超时后告警保持模板文案，`agent_diagnosis` 保持空值；10 秒后的迟到结果被丢弃，不得覆盖已确认告警，也不得阻塞通知 |
 
+### 5.4 当前实现状态
+
+本阶段代码已落地，离线验证证据如下；真实数据库与渠道联调仍按证据门单独签署。
+
+| 项目 | 状态 | 离线证据 | 仍需现场验证 |
+| :--- | :--- | :--- | :--- |
+| `nilm-sentinel` 增量安全扫描、R-01a/R-01b/R-02/R-03/R-04/R-05、状态机、抑制与升级 | 部分实现 | `packages/nilm/sentinel/tests` 的状态机、规则、抑制与扫描器用例 | 上游真实水位线索引、真实热库信号、30 秒 SLO |
+| 规则边界 | R-01b 使用租户配置基线；R-03 仅走上游隐患分类；R-04 因缺分相电流停用 | 缺失信号只记录一次告警日志，不估算 | 自适应 4 周基线、实时过载与分相电流列 |
+| Sentinel 事务写告警与 Outbox、`silence_key`、`nilm_sentinel_watermark` | 已实现 | DDL 18 表断言；内存存储事务用例 | MySQL 隔离级别与并发去重实测 |
+| `nilm-notify` Outbox 领取、60 秒租约、`[1m,5m,15m,1h]` 退避、死信、投递记录保留 | 已实现 | 调度器 5 worker 并发、租约回收、永久失败与退避用例 | 真实 MySQL `SKIP LOCKED` 多进程抢占 |
+| 四个渠道网关适配与加密接收方载荷 | 已实现网关契约 | HTTP 200/429/5xx/4xx、载荷不含明文接收方用例 | 微信/企微/短信供应商沙箱，D-12 短信选型 |
+| Agent 8 秒异步富化、条件回填、迟到结果丢弃 | 已实现 | 10 秒延迟注入、超时、已确认告警不覆盖用例 | 真实模型时延与限流 |
+| BFF `/v1/alerts` 列表与确认 | 已接入 Sentinel | HTTP 端点用例，未挂载时保留 `available:false` 降级 | 端到端小程序联调 |
+| G3-1 30 秒 SLO、G3-3 多进程并发、G3-4 网络故障演练 | 未完成 | — | 需真实测试库与渠道 Mock/沙箱，由安全与运维签署演练报告 |
+
 ---
 
 ## 6. 阶段 4：定时调度报告、系统硬化与全量验收
@@ -303,7 +318,7 @@ flowchart LR
 ```text
 阶段 0: 基础设施、数据源适配与模型沙箱 (Day 1 - Day 5)
   ├── 0.1 初始化 packages/nilm/{core,context,source} 包骨架与 TypeScript 接口
-  ├── 0.2 执行本地 MySQL nilm_system 数据库 DDL 部署 (17 张表)
+  ├── 0.2 执行本地 MySQL nilm_system 数据库 DDL 部署 (18 张表)
   ├── 0.3 实现 MySQL/TDengine 只读仓储、冷代理接口及白名单拦截器，交付 test:connectivity 脚本 (验证 G0-1, G0-2)
   └── 0.4 配置 dsh-nilm-app bundle 并完成启动门禁与工具清单断言 (验证 G0-3, G0-4)
 

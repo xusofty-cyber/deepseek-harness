@@ -21,13 +21,15 @@ kind: "package-group"
 | [`tariff`](tariff/README.zh.md) | `nilmTariff` | 电价方案校验、生效方案选择与分时切片纯函数 |
 | [`analytics`](analytics/README.zh.md) | `nilmAnalytics` | 电费、运行／空载、设备用量、周期对比、电能质量与 CUSUM 特征纯函数 |
 | [`safety`](safety/README.zh.md) | `nilmSafety` | 授权隐患记录检索与确定性风险投影 |
+| [`sentinel`](sentinel/README.zh.md) | `nilmSentinel` | 增量安全扫描、租户规则、告警生命周期与事务化 Outbox 入队 |
+| [`notify`](notify/README.zh.md) | `nilmNotify` | Outbox 调度、渠道网关、重试策略与异步研判 |
 | [`prompt`](prompt/README.zh.md) | — | 与租户无关的稳定系统提示词策略 |
 | [`tools`](tools/README.zh.md) | — | 6 个面向模型的 `nilm_*` 工具与受限结构化事实 |
 | [`service`](service/README.zh.md) | — | 后端 BFF：调用方验签、会话与本轮状态、REST 端点与 SSE 重放 |
 
-后续阶段会在同一组内增加 `charts`、`sentinel`、`scheduler` 与 `notify`。`nilm-service` 负责 HTTP/SSE BFF；本组不实现用户权限、管理后台或面向客户的 Web 应用。
+后续阶段会在同一组内增加 `charts` 与 `scheduler`。`nilm-service` 负责 HTTP/SSE BFF；本组不实现用户权限、管理后台或面向客户的 Web 应用。
 
 ## 已知限制与延期工作
 
-- 阶段 1 与阶段 2 交付拓扑、时序、电价、分析、电能质量与 CUSUM 特征、安全、提示词、6 个面向模型的工具与 `nilm-service` BFF。BFF 将 nonce、会话元数据与本轮缓冲保存在进程内；多副本部署仍需 Redis nonce 与 `nilm_conversation` 持久化。
+- 阶段 1 与阶段 2 交付拓扑、时序、电价、分析、电能质量与 CUSUM 特征、安全、提示词、6 个面向模型的工具与 `nilm-service` BFF；阶段 3 增加巡检规则与 Outbox 通知器。BFF 将 nonce、会话元数据与本轮缓冲保存在进程内；多副本部署仍需 Redis nonce 与 `nilm_conversation` 持久化。
 - 在上游提供分相电流与完整谐波列之前，三相不平衡和完整 THD 不可用；工具返回 `null` 或逐阶可用性，不做估算。

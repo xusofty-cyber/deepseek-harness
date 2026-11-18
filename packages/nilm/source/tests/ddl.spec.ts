@@ -5,9 +5,9 @@ import { NILM_LOCAL_TABLES } from '../src/index.ts'
 const ddl = readFileSync(new URL('../sql/init-nilm-system.sql', import.meta.url), 'utf8')
 
 describe('init-nilm-system.sql', () => {
-  it('creates exactly the seventeen design tables', () => {
+  it('creates exactly the eighteen design tables', () => {
     const tables = [...ddl.matchAll(/CREATE TABLE `([^`]+)`/g)].map(match => match[1])
-    expect(tables).toHaveLength(17)
+    expect(tables).toHaveLength(18)
     expect(new Set(tables)).toEqual(new Set(NILM_LOCAL_TABLES))
   })
 

@@ -50,6 +50,29 @@ export interface NilmHttpResponse {
   end(chunk?: string): unknown
 }
 
+/** JSON-safe alert list page returned by the mounted Sentinel service. */
+export interface AlertListPage {
+  /** Projected alert cards in stable order. */
+  alerts: JsonValue
+  /** Total visible rows matching the implicit default filter. */
+  total: number
+}
+
+/** Alert API mounted by the Sentinel stage. */
+export interface AlertApi {
+  /**
+   * @param caller - verified tenant and receiving user.
+   * @returns the caller-visible alert page.
+   */
+  list(caller: { tenantId: TenantId; userRef: string }): Promise<AlertListPage>
+  /**
+   * @param caller - verified tenant and receiving user.
+   * @param eventId - public alert identifier.
+   * @returns the acknowledgement outcome; an invisible alert is not revealed.
+   */
+  acknowledge(caller: { tenantId: TenantId; userRef: string }, eventId: string): Promise<'acknowledged' | 'already-final'>
+}
+
 /** Options for one BFF instance. */
 export interface NilmHttpServiceOptions {
   readonly config: ResolvedConfig
@@ -62,6 +85,8 @@ export interface NilmHttpServiceOptions {
   readonly now?: () => number
   /** Injectable nonce cache for tests or a shared implementation. */
   readonly nonces?: NonceStore
+  /** Alert API; absent keeps the stage-1 empty, explicitly unavailable skeleton. */
+  readonly alerts?: AlertApi
 }
 
 /** Caller-owned conversation in process memory. */
@@ -244,14 +269,40 @@ export class NilmHttpService {
       return
     }
     if (path === '/v1/alerts' && req.method === 'GET') {
-      this.sendJson(res, 200, { alerts: [], total: 0, available: false })
+      await this.listAlerts(caller, res)
       return
     }
     const ackPath = ACK_PATH.exec(path)
     if (ackPath !== null && req.method === 'POST') {
-      throw new NilmError('DATA_UNAVAILABLE', 'alert acknowledgement is available after the stage-3 Sentinel store is mounted')
+      await this.acknowledgeAlert(caller, ackPath[1] as string, res)
+      return
     }
     throw new NilmError('SCOPE_NOT_FOUND', 'endpoint not found')
+  }
+
+  private async listAlerts(caller: VerifiedCaller, res: NilmHttpResponse): Promise<void> {
+    const alerts = this.options.alerts
+    if (alerts === undefined) {
+      this.sendJson(res, 200, { alerts: [], total: 0, available: false })
+      return
+    }
+    const page = await alerts.list({ tenantId: caller.tenantId, userRef: caller.userRef })
+    this.sendJson(res, 200, { alerts: page.alerts, total: page.total, available: true })
+  }
+
+  private async acknowledgeAlert(caller: VerifiedCaller, eventId: string, res: NilmHttpResponse): Promise<void> {
+    const alerts = this.options.alerts
+    if (alerts === undefined) {
+      throw new NilmError('DATA_UNAVAILABLE', 'alert acknowledgement is unavailable until the Sentinel store is mounted')
+    }
+    const outcome = await alerts.acknowledge({ tenantId: caller.tenantId, userRef: caller.userRef }, eventId)
+    this.audit({
+      type: `alert.${outcome}`,
+      requestId: caller.requestId,
+      tenantId: caller.tenantId,
+      userRef: caller.userRef,
+    })
+    this.sendJson(res, 200, { status: outcome })
   }
 
   private async createConversation(caller: VerifiedCaller, body: Buffer, res: NilmHttpResponse): Promise<void> {
