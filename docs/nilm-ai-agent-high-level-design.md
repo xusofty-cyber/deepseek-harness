@@ -1031,7 +1031,7 @@ SSE 规则：
 
 - **mTLS 未实现**：阶段 1 只接受 HMAC 信封；生产接入前补齐 mTLS 或由网关提供等价的双向认证。
 - **nonce 为单进程内存**：多副本部署时各副本的 nonce 缓存不共享，必须替换为 Redis 才能满足全局防重放。
-- **会话元数据为单进程内存**：`nilm_conversation` 尚未接入；重启后丢失会话列表与 `session_id -> shard_id` 映射。单副本阶段可用，扩容前必须持久化。
+- **会话元数据在配置 PVC 后持久化**：配置 `NILM_SESSIONS_ROOT` 后，Session JSONL 与 `<sessionsRoot>/<tenant>/.nilm/conversations/` 索引可在同分片重启后恢复；未配置时退回单进程内存。MySQL `nilm_conversation` 尚未接入，分片迁移与跨分片漂移恢复不由 BFF 承担。
 - **审计未落库**：安全审计当前写结构化日志；`nilm_security_audit` 表写入随审计存储集成交付。
 - **告警空骨架保留为降级路径**：阶段 3 的 Sentinel 已挂载时，`GET /v1/alerts` 返回 `available: true` 与按调用方过滤的告警；只有 Sentinel 未挂载时才返回 `available: false`，确认接口则返回 `DATA_UNAVAILABLE`，不伪造告警数据。
 

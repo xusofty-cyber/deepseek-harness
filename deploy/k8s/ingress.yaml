@@ -1,0 +1,32 @@
+# TLS terminates here; the backend is the platform edge gateway. The Ingress
+# cannot compute MurmurHash3, so shard selection belongs to nilm-edge, not to
+# an nginx upstream-hash annotation (nginx hashes differently and would route
+# tenants to a Pod that does not own their PVC).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nilm-edge
+  namespace: nilm
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - nilm.example.com
+      secretName: nilm-tls
+  rules:
+    - host: nilm.example.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: nilm-edge
+                port:
+                  name: http

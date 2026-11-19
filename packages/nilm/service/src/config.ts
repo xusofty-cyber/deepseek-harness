@@ -5,6 +5,7 @@
 
 import { isAbsolute, resolve } from 'node:path'
 import z from '@deepseek-ai/schemastery'
+import { resolveShardAssignment, type ShardAssignment } from '@deepseek-ai/dsh-nilm-sharding'
 
 /** Deployment-varying settings; no address, secret, or model id is compiled in. */
 export interface Config {
@@ -14,6 +15,16 @@ export interface Config {
   port?: number
   /** Absolute directory persisted with every new Session. */
   sessionCwd?: string
+  /**
+   * Absolute PVC root that holds one directory per tenant. When set, new
+   * Sessions use `<sessionsRoot>/<tenant>` and conversation records live under
+   * the same tenant directory.
+   */
+  sessionsRoot?: string
+  /** Zero-based shard served by this Pod. */
+  shardIndex?: number
+  /** Total StatefulSet shards; tenants are routed by MurmurHash3 over this count. */
+  shardCount?: number
   /** LLM provider route for ordinary questions. */
   provider?: string
   /** LLM model route for ordinary questions. */
@@ -39,6 +50,9 @@ export const Config: z<Config> = z.object({
   host: z.string().default('0.0.0.0'),
   port: z.natural().max(65535).default(8080),
   sessionCwd: z.string().default(process.cwd()),
+  sessionsRoot: z.string(),
+  shardIndex: z.natural().default(0),
+  shardCount: z.natural().min(1).default(1),
   provider: z.string().default('deepseek-official'),
   model: z.string().required(),
   reasoningModel: z.string(),
@@ -55,6 +69,8 @@ export interface ResolvedConfig {
   host: string
   port: number
   sessionCwd: string
+  sessionsRoot?: string
+  shard: ShardAssignment
   provider: string
   model: string
   reasoningModel?: string
@@ -74,6 +90,11 @@ export interface ResolvedConfig {
 export function resolveConfig(config: Config): ResolvedConfig {
   const sessionCwd = resolve(config.sessionCwd ?? process.cwd())
   if (!isAbsolute(sessionCwd)) throw new TypeError('sessionCwd must resolve to an absolute path')
+  const sessionsRoot = config.sessionsRoot === undefined ? undefined : resolve(config.sessionsRoot)
+  if (sessionsRoot !== undefined && !isAbsolute(sessionsRoot)) {
+    throw new TypeError('sessionsRoot must resolve to an absolute path')
+  }
+  const shard = resolveShardAssignment(config.shardIndex, config.shardCount)
   if (config.model.trim() === '') throw new TypeError('model must be a non-empty string')
   const provider = config.provider ?? 'deepseek-official'
   if (provider.trim() === '') throw new TypeError('provider must be a non-empty string')
@@ -88,6 +109,8 @@ export function resolveConfig(config: Config): ResolvedConfig {
     host: config.host ?? '0.0.0.0',
     port: config.port ?? 8080,
     sessionCwd,
+    ...(sessionsRoot === undefined ? {} : { sessionsRoot }),
+    shard,
     provider,
     model: config.model,
     ...(config.reasoningModel === undefined ? {} : { reasoningModel: config.reasoningModel }),

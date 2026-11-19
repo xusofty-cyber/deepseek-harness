@@ -1,10 +1,22 @@
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'node:http'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { NilmError, type CallContext } from '@deepseek-ai/dsh-nilm-core'
+import { shardForTenant } from '@deepseek-ai/dsh-nilm-sharding'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { canonicalRequest, createSignature } from '../src/auth.ts'
 import { resolveConfig } from '../src/config.ts'
-import { NilmHttpService, type AlertApi, type NilmHttpRequest, type NilmHttpResponse } from '../src/http.ts'
+import { FileConversationStore } from '../src/conversations.ts'
+import {
+  NilmHttpService,
+  type AlertApi,
+  type AuditEvent,
+  type NilmHttpRequest,
+  type NilmHttpResponse,
+  type NilmHttpServiceOptions,
+} from '../src/http.ts'
 import type {
   ChatMessage,
   NilmAgentEvent,
@@ -113,6 +125,7 @@ class FakeSession implements NilmAgentSession {
 
 class FakeRuntime implements NilmAgentRuntime {
   readonly sessions = new Map<string, FakeSession>()
+  readonly persisted = new Map<string, readonly ChatMessage[]>()
   opens = 0
   lastContext: CallContext | undefined
   lastMode: TurnMode | undefined
@@ -126,6 +139,10 @@ class FakeRuntime implements NilmAgentRuntime {
     const session = new FakeSession(sessionId)
     this.sessions.set(sessionId, session)
     return session
+  }
+
+  async history(sessionId: string): Promise<readonly ChatMessage[] | undefined> {
+    return this.persisted.get(sessionId)
   }
 }
 
@@ -194,7 +211,11 @@ function parseSse(body: string): Array<{ id?: number; event: string; data: JsonV
   })
 }
 
-function newService(runtime: FakeRuntime, alerts?: AlertApi): NilmHttpService {
+function newService(
+  runtime: FakeRuntime,
+  alerts?: AlertApi,
+  extra: Pick<Partial<NilmHttpServiceOptions>, 'shard' | 'conversations' | 'audit'> = {},
+): NilmHttpService {
   return new NilmHttpService({
     config: resolveConfig({
       port: 0,
@@ -210,6 +231,7 @@ function newService(runtime: FakeRuntime, alerts?: AlertApi): NilmHttpService {
     ready: () => true,
     now: () => NOW,
     ...(alerts === undefined ? {} : { alerts }),
+    ...extra,
   })
 }
 
@@ -462,5 +484,99 @@ describe('NILM BFF alerts', () => {
 
     expect(response.status).toBe(503)
     expect(JSON.parse(response.body)).toMatchObject({ code: 'DATA_UNAVAILABLE' })
+  })
+})
+
+describe('NILM BFF shard ownership', () => {
+  it('serves a tenant only on the shard selected by MurmurHash3', async () => {
+    const expected = shardForTenant(TENANT_A, 8)
+    const wrong = (expected + 1) % 8
+    const audited: AuditEvent[] = []
+    const service = newService(new FakeRuntime(), undefined, {
+      shard: { index: wrong, count: 8 },
+      audit: event => { audited.push(event) },
+    })
+    try {
+      const response = await call(service, 'POST', '/v1/conversations', Buffer.from('{}'), TENANT_A, SECRET_A)
+      expect(response.status).toBe(403)
+      expect(JSON.parse(response.body)).toMatchObject({ code: 'SCOPE_FORBIDDEN', message: 'tenant is assigned to another shard' })
+      expect(audited).toContainEqual(expect.objectContaining({ type: 'tenant-shard-mismatch', tenantId: TENANT_A }))
+      const health = await call(service, 'GET', '/healthz', Buffer.alloc(0), '', '')
+      expect(health.status).toBe(200)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('keeps the health and readiness probes shard-addressable without a caller envelope', async () => {
+    const service = newService(new FakeRuntime(), undefined, { shard: { index: 3, count: 8 } })
+    try {
+      const ready = await call(service, 'GET', '/readyz', Buffer.alloc(0), '', '')
+      expect(ready.status).toBe(200)
+      expect(JSON.parse(ready.body)).toMatchObject({ shard: { index: 3, count: 8 } })
+    } finally {
+      await service.close()
+    }
+  })
+})
+
+describe('NILM BFF conversation persistence', () => {
+  it('lists and continues a conversation created before the previous Pod stopped', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nilm-conversations-'))
+    const store = new FileConversationStore(root)
+    const first = newService(new FakeRuntime(), undefined, { conversations: store })
+    let second: NilmHttpService | undefined
+    try {
+      const conversationId = await createConversation(first)
+      await first.close()
+
+      const runtime = new FakeRuntime()
+      second = newService(runtime, undefined, { conversations: store })
+      const listed = await call(second, 'GET', '/v1/conversations', Buffer.alloc(0), TENANT_A, SECRET_A)
+      expect(listed.status).toBe(200)
+      expect(JSON.parse(listed.body)).toMatchObject({
+        conversations: [{ conversationId, sessionId: conversationId }],
+      })
+
+      await createTurn(second, conversationId, 'client-after-restart')
+      expect(runtime.opens).toBe(1)
+      expect(runtime.sessions.has(conversationId)).toBe(true)
+    } finally {
+      await first.close().catch(() => undefined)
+      await second?.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reads persisted history after a restart instead of returning an empty transcript', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nilm-history-'))
+    const store = new FileConversationStore(root)
+    const first = newService(new FakeRuntime(), undefined, { conversations: store })
+    let second: NilmHttpService | undefined
+    try {
+      const conversationId = await createConversation(first)
+      await first.close()
+
+      const runtime = new FakeRuntime()
+      runtime.persisted.set(conversationId, [{ id: 'm1', role: 'assistant', text: '昨日用电 12.3 kWh' }])
+      second = newService(runtime, undefined, { conversations: store })
+      const response = await call(
+        second,
+        'GET',
+        `/v1/conversations/${conversationId}/messages`,
+        Buffer.alloc(0),
+        TENANT_A,
+        SECRET_A,
+      )
+
+      expect(response.status).toBe(200)
+      expect(JSON.parse(response.body)).toMatchObject({
+        messages: [{ id: 'm1', role: 'assistant', text: '昨日用电 12.3 kWh' }],
+      })
+    } finally {
+      await first.close().catch(() => undefined)
+      await second?.close()
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

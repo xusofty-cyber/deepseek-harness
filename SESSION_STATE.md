@@ -1,9 +1,9 @@
 # Session: 2026-11-18
 
 **Started:** 2026-11-18 (Asia/Shanghai)
-**Last Updated:** 2026-11-18 17:25 CST
+**Last Updated:** 2026-11-18 18:47 CST
 **Project:** `/home/picohood/projects/opensource/deepseek-harness`
-**Topic:** NILM 阶段 4.1：`nilm-scheduler` 晨报、力调预测与 R-08 数据质量巡检
+**Topic:** NILM 阶段 4.2：租户分片 StatefulSet、PVC 会话索引与同分片恢复（离线部分）
 
 ---
 
@@ -11,41 +11,46 @@
 
 在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务，为微信小程序 / App 调用方提供对话、能效分析、安全隐患检索与主动告警。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。
 
-阶段 1/2 已完成拓扑、时序、电价、分析、电能质量、CUSUM、安全、提示词、六个 `nilm_*` 工具与 BFF。阶段 3 已完成 `nilm-sentinel` 巡检规则、告警状态机、抑制升级、事务化 Outbox，以及 `nilm-notify` 可靠投递、四渠道网关契约和 8 秒异步研判。本会话进入阶段 4，完成 WBS 4.1 的 `nilm-scheduler` 离线实现；4.2 StatefulSet 恢复、4.3 百家工厂压测、4.4 安全渗透与全量验收尚未开始。
+阶段 1/2/3 与 4.1 已提交。本会话完成 WBS 4.2 的离线实现：`packages/nilm/sharding` 路由契约、`nilm-service` 的租户目录/会话索引/分片拒绝、`deploy/k8s/` 全套清单，以及真实 JSONL 后端的撕裂尾部读取与跨实例重载用例。4.2 的现场证据门（G4-2）仍需真实集群演练；4.3 百家工厂压测、4.4 安全渗透尚未开始。
 
 ---
 
 ## What WORKED (with evidence)
 
-- **阶段 4.1 调度器离线测试** — confirmed by: `packages/nilm/scheduler/tests` 8 个文件、41 个用例全部通过（2026-11-18 17:32 CST）。覆盖上海业务时间、PF 预测、质量检查、报告载荷、任务幂等、MySQL 仓储映射、默认数据采集器、配置校验与 20 租户 G4-1 演练。
-- **报告投递闭环** — confirmed by: `packages/nilm/notify/tests/store.spec.ts` 验证 Outbox 领取映射 `report_id`，并在供应商成功后回填 `nilm_report.delivered_at`；告警行与报告行互不干扰。
-- **G4-1 离线演练** — confirmed by: `packages/nilm/scheduler/tests/morning-report.spec.ts` 的 `twenty tenants` 用例通过；20 租户 30 天日数据、5 个计量点、单租户 p95 预算与重复触发不重复报告/投递均有断言。
-- **全部 NILM 测试** — confirmed by: 39 个测试文件、279 个用例全部通过（2026-11-18 17:32 CST），包含阶段 3 的 234 个基线用例与新增调度器/Notify 用例。
-- **调度器类型检查** — confirmed by: 临时 `noEmit` 配置下 `packages/nilm/scheduler/src` 与 `tests` 除本机无法解析 `vitest` 外零错误；根仓库既有 `zod` 缺失错误不在本包范围。
-- **文档门禁** — confirmed by: README limitations 397 个通过；model experience 397 个通过；doc refs 5252 个可解析；doc budgets 7 个在预算内。
-- **翻译配对（本包范围）** — confirmed by: `packages/nilm/README.md`、`packages/nilm/sentinel/README.md`、`packages/nilm/scheduler/README.md`、`packages/nilm/notify/README.md` 四个命名配对一致；对应 `README.i18n.yaml` 已重算。
+- **分片路由契约** — confirmed by: `packages/nilm/sharding/tests/sharding.spec.ts` 15 个用例通过（2026-11-18 18:45 CST），覆盖 MurmurHash3 固定向量、UTF-8 字节口径、同租户稳定性、全分片覆盖与非法输入。
+- **BFF 租户目录与会话索引** — confirmed by: `packages/nilm/service/tests/conversations.spec.ts` 13 个用例；`packages/nilm/service/tests/http.spec.ts` 14 个用例；`package/nilm/service/tests/auth.spec.ts` 8 个用例，共 35 个通过。覆盖路径穿越编码、原子落盘、损坏记录失败、跨实例重载、分片 `403 SCOPE_FORBIDDEN`、探针可寻址、重启后历史读取。
+- **同分片恢复离线证据** — confirmed by: `packages/nilm/service/tests/recovery.spec.ts` 1 个通过、1 个跳过。通过用例用真实 `session-persistence-jsonl` 后端写入完成事件加撕裂尾部，验证读取忽略残行且原文件保留；跳过用例需要本机未安装的原生 `flock` addon。
+- **全部 NILM 测试** — confirmed by: 41 个测试文件、311 个用例全部通过（2026-11-18 18:45 CST），包含阶段 3 的 234 基线、4.1 的调度器用例与本阶段新增用例。
+- **类型检查** — confirmed by: 临时 `noEmit` 配置下 `packages/nilm/sharding` 与 `packages/nilm/service` 零错误；仓库既有 `zod` 缺失与 vendor 类型错误不在本包范围。
+- **tsconfig 别名** — confirmed by: `gen-tsconfig-paths.ts --check` 报告别名已是最新，手工新增的 `@deepseek-ai/dsh-nilm-sharding` 与生成结果一致。
+- **部署清单** — confirmed by: `deploy/k8s/` 9 个 YAML 经 `js-yaml` 解析，资源为 Namespace、ConfigMap、Secret 模板、两个 Service、Ingress、StatefulSet、PDB 和 4 个 NetworkPolicy。
+- **文档门禁** — confirmed by: README limitations 398 个通过；model experience 398 个通过；doc refs 5258 个可解析；doc budgets 7 个在预算内；md links 2648 个通过；5 个命名翻译配对一致，`README.i18n.yaml` 已重算。
+- **`git diff --check`** — confirmed by: 空白与行尾检查通过；新增文件均以单个换行结尾。
 
 ---
 
 ## What Did NOT Work (and why)
 
-- **全仓翻译配对门禁** — failed because: 已存在的 `docs/nilm-ai-agent-detailed-design-phase0.md` 至 `phase3.md` 缺少双语配对；这些文件不属于本阶段改动，未擅自生成翻译。本阶段改动的三个 README 配对已单独验证通过。
-- **根级 `pnpm` 命令** — not executed because: 本机 `pnpm` 直接段错误；测试与类型检查改用 store 中的 `vitest.mjs` / `tsc` 可执行文件。
-- **`vitest --coverage`** — not executed because: 临时环境缺少 `@vitest/coverage-v8`，无法取得覆盖率数字。新增 `store.ts`、`data-source.ts`、`summary-agent.ts` 中，前两者已有直接用例，`summary-agent.ts` 的 Cordis 适配仍未覆盖。
-- **真实 MySQL 并发领取、08:35 送达率、渠道回执、真实模型摘要** — 未执行，因为没有测试库、真实接收方与供应商凭证；不能声称 G4-1 现场证据已通过。
-- **git 提交** — 未执行：当前环境 `.git` 只读；阶段 3 与本阶段改动仍未提交。
+- **真实 K8s G4-2 演练** — 未执行：无目标集群、镜像与真实租户流量。清单中的 SIGKILL、PVC 重挂、节点迁移与边缘路由命令尚未运行；不能声称 G4-2 通过。
+- **根级 `pnpm` 命令** — 未执行：本机 `pnpm` 直接段错误。`pnpm-lock.yaml` 为手工增量修改（service → sharding link 与 `packages/nilm/sharding: {}`），需在正常环境用 `pnpm install --lockfile-only` 复核。
+- **覆盖率门禁** — 未执行：临时环境缺 `@vitest/coverage-v8`。新增 `runtime.history` 的 Cordis 适配没有独立用例，只有 HTTP 层 fake 与真实 JSONL 读取用例。
+- **`verify-cordis-config`** — failed because: 当前环境无法解析 `@deepseek-ai/cordis-plugin-include`；这是既有环境问题，不是本次 manifest 改动引入。
+- **`verify-md-wrap`** — failed because: `docs/nilm-ai-agent-detailed-design-phase2/3/4` 与 `docs/nilm-ai-agent-requirements.md` 存在既有硬换行段落（phase4 命中行均非本次改动）；`deploy/k8s/README*.md` 无命中。未擅自修改无关文档。
+- **`verify-package-readme-summaries`** — failed because: 全部 17 个 `packages/nilm/**/README.md`（含既有的 16 个与新增 sharding）都没有 `## Summary`；这是该私有包组既有约定与门禁的冲突，不是 4.2 引入。若要清零，需整组补 Summary，不应只改 sharding。
+- **`verify-package-paths`** — failed because: 既有断链集中在 `docs/nilm-ai-agent-high-level-design.md` 与一条 archived/proposed Agent Note；本次未改动这些引用。
+- **全仓翻译配对** — 仍被既有未配对详细设计文档阻塞；本阶段新增与修改的配对已单独验证。
+- **git 提交** — 未执行：按用户授权边界，4.2 改动留在工作树。
 
 ---
 
 ## What Has NOT Been Tried Yet
 
-- BFF / Tool 的“查询昨日晨报”读取能力；当前报告只写 `nilm_report`，模型不可见。
-- R-08 冷热库一致性检查；当前只写 warning，等待冷电量路由。
-- 默认部署的月度 `E_p`/`E_q` 预聚合；当前无配置时 `pf_forecast` 以 `DATA_UNAVAILABLE` 失败。
-- WBS 4.2 StatefulSet/PVC 同分片恢复演练。
 - WBS 4.3 `test:perf:load` 百家工厂 30 分钟压测。
 - WBS 4.4 安全渗透、脱敏审计与全量验收。
-- 阶段 3 遗留的真实 30 秒 SLO、MySQL `SKIP LOCKED` 多进程 Outbox、微信/企微/短信沙箱联调。
+- MySQL `nilm_conversation` 表接入；当前恢复路径是 PVC 索引。
+- 同一租户由多个在线副本服务（需要 Redis nonce 与共享幂等记录）。
+- 边缘网关 `nilm-edge` 的真实实现与 100 租户路由演练。
+- 存储类为 `Immediate` 时的节点固定或卷亲和方案。
 - R-01b 自适应 4 周基线、R-03 实时功率过载、R-04 分相电流列。
 
 ---
@@ -54,87 +59,85 @@
 
 | File | Status | Notes |
 | --- | --- | --- |
-| `packages/nilm/scheduler/` | PASS: Complete (offline) | 时间、PF、质量、报告、MySQL 仓储、默认采集器、摘要适配、Cordis 服务与测试 |
-| `packages/nilm/scheduler/tests/store.spec.ts` | PASS: New | MySQL 仓储领取状态、报告去重、告警统计、PF 阈值、审计截断 |
-| `packages/nilm/scheduler/tests/data-source.spec.ts` | PASS: New | 默认采集器的可恢复缺口、致命失败、月度预聚合与 R-08 观测 |
-| `packages/nilm/notify/src/model.ts` / `store.ts` | PASS: Complete | Outbox 任务携带 `report_id`；成功投递回填 `nilm_report.delivered_at` |
-| `packages/nilm/notify/tests/store.spec.ts` | PASS: New | 报告领取映射、送达回填、告警/报告隔离与租约丢失 |
-| `packages/nilm/notify/README.md` / `README.zh.md` / `.i18n.yaml` | PASS: Complete | 报告 Outbox 与 `delivered_at` 回填说明；双语哈希已重算 |
-| `packages/nilm/scheduler/README.md` / `README.zh.md` / `.i18n.yaml` | PASS: Complete | 双语配对哈希已重算 |
-| `packages/bundle/nilm-app/cordis.patch.yml` | PASS: Complete | 挂载 `nilm-scheduler`；`enrichConcurrency/enrichCwd` 保留在 notify |
-| `packages/bundle/nilm-app/tests/bundle.spec.ts` | PASS: Complete | 生产行清单包含 scheduler |
-| `docs/nilm-ai-agent-development-plan.md` | PASS: Complete | 新增 §6.4 当前实现状态与证据门 |
-| `docs/nilm-ai-agent-high-level-design.md` | PASS: Complete | §7.6/7.7 实现边界与延期项已更新 |
-| `docs/nilm-ai-agent-architecture.md` | PASS: Complete | §8.6、部署边界、定时任务模式已更新 |
-| `packages/nilm/README.md` / `README.zh.md` | PASS: Complete | 包表新增 scheduler |
-| `packages/nilm/sentinel/README.md` / `README.zh.md` | PASS: Complete | R-06/R-07/R-08 归属改为 scheduler |
-| `SESSION_STATE.md` | PASS: New | 本文件 |
+| `packages/nilm/sharding/` | PASS: New | `murmur3x86_32`、`shardForTenant`、`resolveShardAssignment`、`shardPodName`、双语 README 与 15 个用例 |
+| `packages/nilm/service/src/paths.ts` | PASS: New | 租户路径段转义与 `<sessionsRoot>/<tenant>` 解析 |
+| `packages/nilm/service/src/conversations.ts` | PASS: New | `ConversationStore`、内存与 PVC 实现、临时文件 + fsync + rename |
+| `packages/nilm/service/src/config.ts` | PASS: Modified | `sessionsRoot`、`shardIndex`、`shardCount` 与解析后 `shard` |
+| `packages/nilm/service/src/runtime.ts` | PASS: Modified | 租户 cwd、跨租户 resume 拒绝、`history()` 读取持久化历史 |
+| `packages/nilm/service/src/http.ts` | PASS: Modified | 租户索引装载、轮次结束落盘、`close()` 排空写入、验签后分片守卫、`/readyz` 分片信息 |
+| `packages/nilm/service/src/index.ts` | PASS: Modified | 按 `sessionsRoot` 选择存储、注入分片与后台失败上报 |
+| `packages/nilm/service/tests/` | PASS: New/Modified | 35 个用例；恢复用例另跑 |
+| `deploy/k8s/` | PASS: New | 9 个清单 + 双语 README + i18n 记录；G4-2 演练步骤已写入 |
+| `packages/bundle/nilm-app/cordis.patch.yml` | PASS: Modified | `NILM_SESSIONS_ROOT`、`NILM_SHARD_INDEX`（从 Pod 序号推导）、`NILM_SHARD_COUNT` |
+| `packages/bundle/nilm-app/README*.md` | PASS: Modified | 进程内状态与 PVC 恢复边界已同步 |
+| `docs/nilm-ai-agent-detailed-design-phase4.md` | PASS: Modified | §5.1 图示改为 MurmurHash3 取模；§5.2/5.3 记录真实布局与证据边界 |
+| `docs/nilm-ai-agent-architecture.md` | PASS: Modified | 分片路由、会话归属与 projection 说明 |
+| `docs/nilm-ai-agent-high-level-design.md` / `development-plan.md` | PASS: Modified | 会话元数据状态与 G4-2 行已更新 |
+| `pnpm-lock.yaml` / `tsconfig.base.json` / `scripts/verify-package-readme-model-experience.ts` | PASS: Modified | 手工 lockfile、路径别名与 README 豁免 |
+| `SESSION_STATE.md` | PASS: Rewritten | 本文件 |
 
-未跟踪文件：`packages/nilm/scheduler/`。已修改未提交：阶段 3 的 sentinel/notify/source 等文件、本阶段的 docs、bundle、根配置、lockfile 与会话状态。
+工作树仍有 4.2 的未跟踪目录与修改文件；上一轮 4.1 已在 `6b8acd3470` 提交。
 
 ---
 
 ## Decisions Made
 
-- **幂等键为 `(job_type, tenant_id, business_date)`** — reason: 同一租户同一业务日只计算一次；晨报业务日是昨日，力调与 R-08 使用执行日。
-- **多副本依靠数据库幂等而非 Leader 选举** — reason: `nilm_job_run` 唯一键、事务领取与租约即可阻止同业务日重复计算；部署表更新为 1+ 副本。
-- **R-06 只做能量加权 PF** — reason: 禁止逐点 PF 平均；当月已完成日实际值 + 最近 7 个同星期中位数，缺失星期回退最近 7 日中位数。
-- **R-06 无政策或无月度 P/Q 必须失败** — reason: 不以估算或假数据通过；默认 `MonthlyEnergySource` 显式抛 `DATA_UNAVAILABLE`。
-- **模型只写摘要文字** — reason: payload 数字、风险等级、接收方与投递均由确定性代码控制；摘要失败、空白或超时保留模板。
-- **报告投递经共享 Outbox** — reason: `nilm_report` 按 `(tenant, report_type, report_date)` 去重；Outbox `notification_id = report_id`，渠道重试归 `nilm-notify`。
-- **R-08 不向客户发送** — reason: 覆盖率、父子偏差与冷热一致性属于运维数据质量，只写 `nilm_security_audit` 与日志。
-- **scheduler 默认不挂模型** — reason: 仅配置 `summaryModel` 时创建一次性 Cordis Agent；默认模板路径不产生 Session 或模型请求。
+- **路由函数为 MurmurHash3 x86-32 取模，不是一致性哈希环** — reason: 固定分片数下稳定且可用固定向量验证；变更分片数属于迁移，必须排空旧 Pod 并搬运租户目录，不承诺在线双写。
+- **分片守卫放在 HMAC 验签之后** — reason: 只有已认证调用方才暴露租户归属；`/healthz` 与 `/readyz` 保持无信封可探活。
+- **租户目录承载 Session 与索引** — reason: 同一 PVC 上 JSONL 与 `.nilm/conversations` 同生命周期；未配置 `sessionsRoot` 时退回进程内索引。
+- **恢复为惰性 resume，不在启动时全量扫描** — reason: 首次 list/continue/history 时按租户装载，避免启动放大；跨租户 resume 由存储 cwd 再校验一次。
+- **StatefulSet `OrderedReady` + JSONL `flock` 双层保护** — reason: 旧 Pod 消失后才创建继任者，内核租约阻止在线双写；不承诺新旧 Pod 同节点。
+- **边缘路由由平台网关承担** — reason: Ingress 无法计算 MurmurHash3，nginx `upstream-hash-by` 算法不同；BFF 守卫使误路由无害。
+- **`DSH_HOME` 与 `HOME` 指向 PVC** — reason: 容器只读根文件系统，`dsh` 每次启动重写 profile 根；镜像必须内置 dsh 安装与 bundle，首启不依赖下载。
+- **NetworkPolicy 为边缘网关补出口规则** — reason: 命名空间级 default-deny 同时阻断网关到分片 Pod，仅有入站规则不够。
 
 ---
 
 ## Blockers & Open Questions
 
-- 阶段 3 与阶段 4.1 尚未提交；`.git` 在当前沙箱只读，需在正常终端执行提交。
-- 全仓 translation-pairing 被四个既有详细设计文档阻塞；需要单独补英文配对或调整其登记范围。
-- 真实 G4-1 送达率 >99% 无在线渠道回执，不能签署。
-- 默认部署必须提供月度 `E_p`/`E_q` 预聚合，否则 R-06 每天失败；需要上游接口或可信汇总表。
-- BFF 查询晨报 Tool 未实现；设计文档已将其列为延期项。
-- 覆盖率门禁未取得数字；若 CI 对 `packages/*/*/src` 执行 per-file 100%，需为 `summary-agent.ts` 补 Cordis 适配测试，并确认阶段 3 store 文件的既有缺口。
+- 4.2 改动尚未提交；需要在正常终端执行提交。
+- G4-2 现场证据门未通过：真实 SIGKILL、PVC 重挂、节点一致性与历史续接均未演练。
+- 默认 StorageClass 是否为 `WaitForFirstConsumer` 未知；`Immediate` 需要节点固定策略。
+- `pnpm-lock.yaml` 手工修改需在 pnpm 可用环境复核。
+- 镜像尚未定义：必须包含 `dsh`、Node ≥ 24.9 与 `@deepseek-ai/dsh-nilm-app` bundle。
+- 同租户多在线副本仍被 nonce/幂等进程内存限制；不在 4.2 范围。
+- `nilm-edge` 网关实现仍归平台团队，仓库只提供端点载体与路由契约。
 
 ---
 
 ## Exact Next Step
 
-1. 在可写 `.git` 的正常终端提交阶段 3 与阶段 4.1：
+1. 在可写 `.git` 的正常终端提交 4.2：
 
 ```sh
 cd /home/picohood/projects/opensource/deepseek-harness
-git add docs packages/nilm packages/bundle/nilm-app scripts tsconfig.base.json tsconfig.host.json pnpm-lock.yaml package.json SESSION_STATE.md
-git commit -m "feat(nilm): add scheduled reports, monthly PF projection, and data-quality jobs"
+git add deploy packages/nilm packages/bundle/nilm-app docs tsconfig.base.json pnpm-lock.yaml scripts/verify-package-readme-model-experience.ts SESSION_STATE.md
+git commit -m "feat(nilm): add tenant sharding, PVC conversation index, and K8s deployment"
 ```
 
-2. 下一开发单元优先 WBS 4.2：新增 `deploy/k8s/` StatefulSet、Service、Ingress、NetworkPolicy 与同分片 PVC 恢复测试；不要声称跨分片漂移恢复。
-3. 若先补产品闭环，再实现“查询昨日晨报”Tool：只读 `nilm_report`，按已验证 `tenant_id` 与 `user_ref` 绑定，不重算、不暴露跨租户报告。
-4. 现场证据门顺序：真实 MySQL 幂等并发 → 渠道沙箱与 08:35 送达率 → 百家工厂压测 → 安全渗透。每项必须保存命令、输出与时间戳。
+2. 进入 WBS 4.3：实现 `test:perf:load` 百家工厂 30 分钟压测脚本与 G4-3 指标采集，不重跑 4.2 离线用例。
+3. 现场证据顺序：先在目标集群执行 `deploy/k8s/README.md` 的 G4-2 演练并保存节点/卷/历史输出，再做 4.3 压测，最后 4.4 渗透。
+4. 部署前用 `kubectl get storageclass` 确认 `WaitForFirstConsumer`，并替换 `networkpolicy.yaml` 的 CIDR 占位符。
 
 ---
 
 ## Environment & Setup Notes
 
-- NILM 全量测试（临时配置在 `/tmp/vitest.nilm.config.mjs`）：
+- NILM 全量测试（临时配置在 `/tmp/vitest.nilm.config.mjs`，已排除需要原生 flock 的 recovery 用例）：
 
 ```sh
 V=$(find ~/.local/share/pnpm/store/v11/links/@/vitest -name vitest.mjs | head -1)
 node "$V" run --config /tmp/vitest.nilm.config.mjs
+node "$V" run --config /tmp/vitest.nilm.config.mjs packages/nilm/sharding/tests
+node "$V" run --config /tmp/vitest.nilm.config.mjs packages/nilm/service/tests
+node "$V" run --config /tmp/vitest.recovery.config.mjs
 ```
 
-- 调度器单项：
-
-```sh
-node "$V" run --config /tmp/vitest.nilm.config.mjs packages/nilm/scheduler/tests
-node "$V" run --config /tmp/vitest.nilm.config.mjs packages/nilm/scheduler/tests/morning-report.spec.ts -t 'twenty tenants'
-```
-
-- 类型检查（临时 `noEmit` 配置在 `/tmp/tsconfig.scheduler.json`）：
+- 类型检查（临时 `noEmit` 配置在 `/tmp/tsconfig.sharding.json`）：
 
 ```sh
 D=$(ls -d ~/.local/share/pnpm/store/v11/links/@/typescript/5.9.3/*/node_modules/typescript/bin/tsc | head -1)
-node "$D" -p /tmp/tsconfig.scheduler.json
+node "$D" -p /tmp/tsconfig.sharding.json 2>&1 | grep -E "packages/nilm/(sharding|service)"
 ```
 
 - 文档门禁：
@@ -144,7 +147,8 @@ node --experimental-transform-types scripts/verify-package-readme-limitations.ts
 node --experimental-transform-types scripts/verify-package-readme-model-experience.ts
 node --experimental-transform-types scripts/verify-doc-refs.ts
 node --experimental-transform-types scripts/verify-doc-budgets.ts
-node --experimental-transform-types scripts/verify-translation-pairing.ts packages/nilm/README.md packages/nilm/sentinel/README.md packages/nilm/scheduler/README.md packages/nilm/notify/README.md
+node --experimental-transform-types scripts/verify-md-links.ts
+node --experimental-transform-types scripts/verify-translation-pairing.ts packages/nilm/README.md packages/nilm/service/README.md packages/nilm/sharding/README.md deploy/k8s/README.md packages/bundle/nilm-app/README.md
 ```
 
 - 当前环境 `pnpm` 会段错误；不要反复重试。`git` 写操作需在正常终端执行。

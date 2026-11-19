@@ -1,0 +1,100 @@
+# Default-deny, then admit only the dependencies nilm-agent needs. Replace the
+# CIDR placeholders with the data-source ranges; the model provider is reached
+# over HTTPS on port 443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: nilm
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: nilm
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nilm-agent
+  namespace: nilm
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nilm-agent
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # The edge gateway is the only caller allowed to reach a shard Pod. This
+    # podSelector matches the nilm namespace only; when the platform gateway
+    # runs elsewhere, add its namespaceSelector to this rule.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nilm-edge
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: REPLACE_WITH_MYSQL_CIDR
+      ports:
+        - protocol: TCP
+          port: 3306
+    - to:
+        - ipBlock:
+            cidr: REPLACE_WITH_TDENGINE_CIDR
+      ports:
+        - protocol: TCP
+          port: 6041
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-edge-ingress
+  namespace: nilm
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nilm-edge
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Default-deny also covers the gateway. Without this rule the gateway can
+    # resolve DNS but cannot open a connection to the shard Pod it selected.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nilm-agent
+      ports:
+        - protocol: TCP
+          port: 8080

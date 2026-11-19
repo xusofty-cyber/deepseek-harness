@@ -155,7 +155,7 @@ flowchart LR
 
 已完成：五级拓扑与互不重叠计量点选择、热/统计/冷路由与降采样、分时电价与电费、设备运行/停止时长与估算电量、安全隐患投影、4 个 `nilm_*` Tool、稳定基座提示词、BFF REST/SSE、HMAC 验签、时间戳/nonce 校验、`allowed_scope`、会话三元组归属、`clientMessageId` 幂等、`Last-Event-ID` 重放、取消与健康检查。
 
-以下为明确的部署前置，不伪装成已交付：mTLS 仅完成协议设计，代码只接受 HMAC；nonce、会话元数据、幂等映射与本轮缓冲是进程内状态，多副本前需 Redis 与 `nilm_conversation` 持久化；`nilm_security_audit` 尚写日志；告警端点为空骨架；黄金问答 Session 快照需在具备真实数据源与模型录制的环境生成。阶段 1 `nilm_appliance_query` 只返回上游稳定的运行/停止状态与估算电量，不推断空载或浪费金额。
+以下为明确的部署前置，不伪装成已交付：mTLS 仅完成协议设计，代码只接受 HMAC；nonce、幂等映射与本轮缓冲是进程内状态，多副本前需 Redis 与共享幂等记录；会话元数据在配置 `NILM_SESSIONS_ROOT` 后落 PVC，MySQL `nilm_conversation` 尚未接入；`nilm_security_audit` 尚写日志；告警端点为空骨架；黄金问答 Session 快照需在具备真实数据源与模型录制的环境生成。阶段 1 `nilm_appliance_query` 只返回上游稳定的运行/停止状态与估算电量，不推断空载或浪费金额。
 
 ---
 
@@ -324,7 +324,8 @@ flowchart LR
 | R-08 覆盖率与父子计量偏差巡检 | 已实现；冷热一致性停用 | `quality.spec.ts`、调度器运维审计用例 | 配置冷电量路由后补冷热一致性；真实表数据质量 |
 | 模型摘要边界 | 已实现 | 超时、空白摘要和失败回退模板用例 | 真实模型时延与限流；默认不创建 Session |
 | G4-1 晨报演练脚本 | 离线部分通过 | `pnpm test:scheduler:morning-report` 验证 20 租户重算、幂等与延迟预算 | 08:35 前送达完成率 > 99% 需在线渠道回执 |
-| G4-2 StatefulSet 同分片恢复、G4-3 百家工厂压测、G4-4 渗透演练 | 未开始 | — | 需 K8s、压测环境与安全测试环境 |
+| G4-2 租户分片路由、PVC 会话索引、同分片恢复 | 离线部分完成 | `packages/nilm/sharding` 固定向量与分布用例；`packages/nilm/service/tests` 覆盖租户目录、分片拒绝、跨实例会话重载；`packages/nilm/service/tests/recovery.spec.ts` 用真实 JSONL 后端验证撕裂尾部读取，并在原生租约可用时验证写互斥与继任续写 | 需真实 K8s 环境执行 SIGKILL、PVC 重挂与边缘路由演练；`deploy/k8s/` 清单已交付，但 `nilm-edge` 由平台边缘网关实现 |
+| G4-3 百家工厂压测、G4-4 渗透演练 | 未开始 | — | 需压测环境与安全测试环境 |
 
 ---
 

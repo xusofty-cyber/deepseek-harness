@@ -15,9 +15,11 @@ import {
 import type { AddressInfo } from 'node:net'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { NilmError, type SessionId, type TenantId } from '@deepseek-ai/dsh-nilm-core'
+import { shardForTenant, type ShardAssignment } from '@deepseek-ai/dsh-nilm-sharding'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { AuthError, NonceStore, verifyRequest, type VerifiedCaller } from './auth.ts'
 import type { ResolvedConfig } from './config.ts'
+import { MemoryConversationStore, type ConversationStore, type StoredConversation } from './conversations.ts'
 import { TurnEventBuffer } from './events.ts'
 import type { ChatMessage, NilmAgentEvent, NilmAgentRuntime, NilmAgentSession, TurnMode } from './runtime.ts'
 
@@ -87,6 +89,12 @@ export interface NilmHttpServiceOptions {
   readonly nonces?: NonceStore
   /** Alert API; absent keeps the stage-1 empty, explicitly unavailable skeleton. */
   readonly alerts?: AlertApi
+  /** Durable conversation index; absent keeps process-local metadata. */
+  readonly conversations?: ConversationStore
+  /** Shard membership enforced after caller verification; absent serves every tenant. */
+  readonly shard?: ShardAssignment
+  /** Report a failed background write that did not fail the caller's turn. */
+  readonly reportBackgroundFailure?: (operation: string, error: unknown) => void
 }
 
 /** Caller-owned conversation in process memory. */
@@ -143,9 +151,12 @@ export class NilmHttpService {
   private readonly now: () => number
   private readonly audit: (event: AuditEvent) => void
   private readonly conversations = new Map<string, ConversationRecord>()
+  private readonly store: ConversationStore
+  private readonly tenantLoads = new Map<string, Promise<void>>()
   private readonly turns = new Map<string, TurnRecord>()
   private readonly idempotency = new Map<string, { turnId: string; expiresAt: number }>()
   private readonly streams = new Set<NilmHttpResponse>()
+  private readonly pendingWrites = new Set<Promise<void>>()
   private closing = false
   private listening = false
 
@@ -156,6 +167,7 @@ export class NilmHttpService {
     this.nonces = options.nonces ?? new NonceStore()
     this.now = options.now ?? (() => Date.now())
     this.audit = options.audit ?? (() => undefined)
+    this.store = options.conversations ?? new MemoryConversationStore()
     this.server = createServer((req, res) => { void this.handleRequest(req, res) })
   }
 
@@ -191,6 +203,7 @@ export class NilmHttpService {
         this.server.close(error => error === undefined ? resolve() : reject(error))
       })
     }
+    await Promise.allSettled([...this.pendingWrites])
   }
 
   /**
@@ -225,6 +238,9 @@ export class NilmHttpService {
       this.sendJson(res, ready && secretsConfigured ? 200 : 503, {
         status: ready && secretsConfigured ? 'ready' : 'not_ready',
         secretsConfigured,
+        ...(this.options.shard === undefined ? {} : {
+          shard: { index: this.options.shard.index, count: this.options.shard.count },
+        }),
       })
       return
     }
@@ -240,13 +256,14 @@ export class NilmHttpService {
       clockSkewMs: this.options.config.clockSkewMs,
       nonceTtlMs: this.options.config.nonceTtlMs,
     })
+    this.assertShardOwnership(caller)
     if (caller.allowedScope === undefined) this.auditSecurity(caller, 'scope-defaulted-tenant-wide')
     if (path === '/v1/conversations' && req.method === 'POST') {
       await this.createConversation(caller, body, res)
       return
     }
     if (path === '/v1/conversations' && req.method === 'GET') {
-      this.listConversations(caller, res)
+      await this.listConversations(caller, res)
       return
     }
     if (path === '/v1/turns' && req.method === 'POST') {
@@ -265,7 +282,7 @@ export class NilmHttpService {
     }
     const messagesPath = MESSAGES_PATH.exec(path)
     if (messagesPath !== null && req.method === 'GET') {
-      this.listMessages(caller, messagesPath[1] as string, res)
+      await this.listMessages(caller, messagesPath[1] as string, res)
       return
     }
     if (path === '/v1/alerts' && req.method === 'GET') {
@@ -309,7 +326,8 @@ export class NilmHttpService {
     if (body.length > 0) parseJsonObject(body)
     const id = `conv_${randomBytes(16).toString('hex')}`
     const now = this.now()
-    this.conversations.set(id, {
+    await this.ensureTenantLoaded(caller.tenantId)
+    const conversation: ConversationRecord = {
       id,
       sessionId: id,
       tenantId: caller.tenantId,
@@ -317,11 +335,14 @@ export class NilmHttpService {
       createdAt: now,
       updatedAt: now,
       lastText: '',
-    })
+    }
+    await this.store.put(toStored(conversation))
+    this.conversations.set(id, conversation)
     this.sendJson(res, 201, { conversationId: id, sessionId: id, createdAt: new Date(now).toISOString() })
   }
 
-  private listConversations(caller: VerifiedCaller, res: NilmHttpResponse): void {
+  private async listConversations(caller: VerifiedCaller, res: NilmHttpResponse): Promise<void> {
+    await this.ensureTenantLoaded(caller.tenantId)
     const rows = [...this.conversations.values()]
       .filter(item => item.tenantId === caller.tenantId && item.userRef === caller.userRef)
       .sort((left, right) => right.updatedAt - left.updatedAt)
@@ -352,8 +373,8 @@ export class NilmHttpService {
       return
     }
     const conversation = parsed.conversationId === undefined
-      ? this.newConversation(caller)
-      : this.conversationFor(caller, parsed.conversationId)
+      ? await this.newConversation(caller)
+      : await this.conversationFor(caller, parsed.conversationId)
     if (conversation.activeTurnId !== undefined) {
       throw new NilmError('INVALID_ARGUMENT', 'conversation already has an active turn')
     }
@@ -524,7 +545,43 @@ export class NilmHttpService {
     if (conversation !== undefined) {
       if (conversation.activeTurnId === turn.id) delete conversation.activeTurnId
       conversation.updatedAt = this.now()
+      this.persistConversation(conversation)
     }
+  }
+
+  /** Write the index change without letting a failed background write break the SSE stream. */
+  private persistConversation(conversation: ConversationRecord): void {
+    const write = this.store.put(toStored(conversation)).catch((error: unknown) => {
+      this.audit({
+        type: 'conversation.persist-failed',
+        tenantId: conversation.tenantId,
+        userRef: conversation.userRef,
+        code: error instanceof Error ? error.name : 'UNKNOWN',
+      })
+      this.options.reportBackgroundFailure?.('conversation.persist', error)
+    })
+    this.pendingWrites.add(write)
+    void write.finally(() => { this.pendingWrites.delete(write) })
+  }
+
+  /**
+   * Load one tenant's index once per process. Records written by a previous Pod
+   * become visible before the first list, continue, or history request.
+   * @param tenantId - verified tenant.
+   */
+  private async ensureTenantLoaded(tenantId: TenantId): Promise<void> {
+    const loaded = this.tenantLoads.get(tenantId)
+    if (loaded !== undefined) return loaded
+    const load = this.store.list(tenantId).then((records) => {
+      for (const record of records) {
+        if (!this.conversations.has(record.id)) this.conversations.set(record.id, fromStored(record))
+      }
+    }, (error: unknown) => {
+      this.tenantLoads.delete(tenantId)
+      throw error
+    })
+    this.tenantLoads.set(tenantId, load)
+    return load
   }
 
   private cancelTurn(caller: VerifiedCaller, turnId: string, res: NilmHttpResponse): void {
@@ -584,18 +641,27 @@ export class NilmHttpService {
     }
   }
 
-  private listMessages(caller: VerifiedCaller, conversationId: string, res: NilmHttpResponse): void {
-    const conversation = this.conversationFor(caller, conversationId)
-    const messages: readonly ChatMessage[] = conversation.agent?.messages() ?? []
+  private async listMessages(caller: VerifiedCaller, conversationId: string, res: NilmHttpResponse): Promise<void> {
+    const conversation = await this.conversationFor(caller, conversationId)
+    const messages: readonly ChatMessage[] = conversation.agent?.messages()
+      ?? await this.options.runtime.history(conversation.sessionId, {
+        tenantId: caller.tenantId,
+        userRef: caller.userRef,
+        requestId: caller.requestId,
+        sessionId: brandString<SessionId>(conversation.sessionId),
+        ...(caller.allowedScope === undefined ? {} : { allowedScope: caller.allowedScope }),
+      }, 'auto')
+      ?? []
     this.sendJson(res, 200, {
       conversationId,
       messages: messages.map(message => ({ id: message.id, role: message.role, text: message.text })),
     })
   }
 
-  private newConversation(caller: VerifiedCaller): ConversationRecord {
+  private async newConversation(caller: VerifiedCaller): Promise<ConversationRecord> {
     const id = `conv_${randomBytes(16).toString('hex')}`
     const now = this.now()
+    await this.ensureTenantLoaded(caller.tenantId)
     const conversation: ConversationRecord = {
       id,
       sessionId: id,
@@ -605,11 +671,13 @@ export class NilmHttpService {
       updatedAt: now,
       lastText: '',
     }
+    await this.store.put(toStored(conversation))
     this.conversations.set(id, conversation)
     return conversation
   }
 
-  private conversationFor(caller: VerifiedCaller, id: string): ConversationRecord {
+  private async conversationFor(caller: VerifiedCaller, id: string): Promise<ConversationRecord> {
+    await this.ensureTenantLoaded(caller.tenantId)
     const conversation = this.conversations.get(id)
     if (conversation === undefined) throw new NilmError('SCOPE_NOT_FOUND', 'conversation not found')
     if (conversation.tenantId !== caller.tenantId || conversation.userRef !== caller.userRef) {
@@ -655,6 +723,20 @@ export class NilmHttpService {
     })
   }
 
+  /**
+   * Refuse a verified caller whose tenant is owned by another shard. The edge
+   * routes by the same function; this check makes a misroute harmless instead
+   * of writing a tenant's Session onto the wrong PVC.
+   * @param caller - caller after envelope verification.
+   */
+  private assertShardOwnership(caller: VerifiedCaller): void {
+    const shard = this.options.shard
+    if (shard === undefined) return
+    if (shardForTenant(caller.tenantId, shard.count) === shard.index) return
+    this.auditSecurity(caller, 'tenant-shard-mismatch', 'SCOPE_FORBIDDEN')
+    throw new NilmError('SCOPE_FORBIDDEN', 'tenant is assigned to another shard')
+  }
+
   private sendFailure(res: NilmHttpResponse, error: unknown): void {
     if (closureClosed(res)) return
     if (res.headersSent) {
@@ -679,6 +761,32 @@ export class NilmHttpService {
       'content-length': Buffer.byteLength(body),
     })
     res.end(body)
+  }
+}
+
+/** Project the durable record into the live index entry. */
+function fromStored(record: StoredConversation): ConversationRecord {
+  return {
+    id: record.id,
+    sessionId: record.sessionId,
+    tenantId: record.tenantId,
+    userRef: record.userRef,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    lastText: record.lastText,
+  }
+}
+
+/** Strip live agent, turn, and idempotency state from the durable record. */
+function toStored(record: ConversationRecord): StoredConversation {
+  return {
+    id: record.id,
+    sessionId: record.sessionId,
+    tenantId: record.tenantId,
+    userRef: record.userRef,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    lastText: record.lastText,
   }
 }
 

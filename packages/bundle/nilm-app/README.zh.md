@@ -16,7 +16,8 @@
 
 ## 已知限制与延期工作
 
-- BFF 将 nonce、会话元数据与本轮缓冲保存在进程内存。多副本部署需要 Redis nonce 与 `nilm_conversation` 持久化；详见 service 的已知限制。
+- BFF 的 nonce 缓存、幂等映射与本轮缓冲保存在进程内存；重启会丢失进行中的 SSE 缓冲与 `clientMessageId` 去重。
+- 配置 `NILM_SESSIONS_ROOT` 后，会话索引与 Session JSONL 位于分片 PVC，`NILM_SHARD_COUNT` 必须与 StatefulSet 副本数一致。同一租户由多个在线副本服务前，仍需 Redis nonce 与共享幂等记录；详见 service 的已知限制。
 - mTLS 与 `nilm_security_audit` 持久化尚未包含在阶段 1 BFF 中。
 - `mysql2` 是 `@deepseek-ai/dsh-nilm-source` 的可选 peer；部署镜像必须在 MySQL 探活或生产查询运行前安装兼容版本。
 - Sentinel 与 notify 已挂载，但 30 秒 SLO、真实 `SKIP LOCKED` 竞争与微信/企微/短信供应商联调仍需使用真实端点分阶段演练。

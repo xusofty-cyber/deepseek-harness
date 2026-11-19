@@ -447,6 +447,7 @@
       "@deepseek-ai/dsh-nilm-safety": ["./packages/nilm/safety/src"],
       "@deepseek-ai/dsh-nilm-scheduler": ["./packages/nilm/scheduler/src"],
       "@deepseek-ai/dsh-nilm-sentinel": ["./packages/nilm/sentinel/src"],
+      "@deepseek-ai/dsh-nilm-sharding": ["./packages/nilm/sharding/src"],
       "@deepseek-ai/dsh-nilm-service": ["./packages/nilm/service/src"],
       "@deepseek-ai/dsh-nilm-source": ["./packages/nilm/source/src"],
       "@deepseek-ai/dsh-nilm-tariff": ["./packages/nilm/tariff/src"],

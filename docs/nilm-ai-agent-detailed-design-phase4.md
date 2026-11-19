@@ -167,19 +167,19 @@ flowchart LR
 
 ## 5. 多租户分片与 StatefulSet 高可用容灾（阶段 4.2）
 
-### 5.1 租户一致性哈希分片架构
+### 5.1 租户分片路由架构
 
 为支撑百家工业客户并发对话与独立会话上下文，后端采用 Kubernetes `StatefulSet` 部署架构：
 
 ```mermaid
 flowchart TD
-    Ingress["K8s Ingress (BFF Gateway)"] --> HashRoute{"Consistent Hash<br/>(MurmurHash3 on tenant_id)"}
-    HashRoute -- "Shard 0" --> Pod0["nilm-agent-0 (PVC: data-nilm-0)"]
-    HashRoute -- "Shard 1" --> Pod1["nilm-agent-1 (PVC: data-nilm-1)"]
-    HashRoute -- "Shard N-1" --> PodN["nilm-agent-(N-1) (PVC: data-nilm-(N-1))"]
+    Ingress["K8s Ingress (-> nilm-edge)"] --> HashRoute{"MurmurHash3 x86-32<br/>modulo N shards"}
+    HashRoute -- "Shard 0" --> Pod0["nilm-agent-0 (PVC: data-nilm-agent-0-0)"]
+    HashRoute -- "Shard 1" --> Pod1["nilm-agent-1 (PVC: data-nilm-agent-1-0)"]
+    HashRoute -- "Shard N-1" --> PodN["nilm-agent-(N-1) (PVC: data-nilm-agent-(N-1)-0)"]
 
     subgraph PodInternal["单 Pod 内部隔离机制"]
-        PVC["Mounted PVC: /data/sessions/{tenant_id}/"]
+        PVC["Mounted PVC: /data/sessions/{encoded-tenant}/"]
         Engine["Cordis Microkernel Runtime"]
         Engine --> PVC
     end
@@ -187,11 +187,20 @@ flowchart TD
 
 ### 5.2 PVC 本地化会话存储与崩溃自愈验证（G4-2）
 
-- **数据落盘协议**：每个租户的 Session 历史以 JSONL 追加方式写至挂载的 PVC 本地目录：`/data/sessions/{tenant_id}/{session_id}.jsonl`；
+- **数据落盘协议**：租户工作目录为 `<NILM_SESSIONS_ROOT>/<编码后的 tenant_id>`；dsh JSONL 后端再按 project key 与 Session id 分目录写入不可变的格式代文件，例如 `/data/sessions/--data-sessions-tenant-a--/conv_.../0001.jsonl`。会话索引位于 `<NILM_SESSIONS_ROOT>/<编码后的 tenant_id>/.nilm/conversations/<conversation_id>.json`，采用临时文件加原子 rename 落盘；
 - **同分片崩溃恢复保障**：
-  1. 当 Pod 因 OOM 或宿主机故障被 `SIGKILL` 终止时，K8s 重新在同节点拉起同名 Pod，重新挂载对应 PVC；
+  1. StatefulSet 终止 `nilm-agent-<i>` 后才会创建同序号继任 Pod，并重新挂载 `data-nilm-agent-<i>-0`；节点是否相同取决于 StorageClass 的绑定模式与调度结果，不承诺“同节点”；
   2. 新 Pod 启动后，读取 Session JSONL。若文件末尾存在未完整刷盘的半行文本（中途崩溃残余），解析器利用 `try-catch` 严格截断无效残行，恢复所有已确认落盘的完整事件；
-  3. 客户端前端利用 `Last-Event-ID` 发起重连，Pod 无缝从断点处继续输出，用户无感知。
+  3. 旧 Pod 的写租约由内核 `flock` 持有；旧进程未终止前，新 Pod 的写打开会以 `SessionAlreadyOwnedError` 失败，避免在线双写。旧 Pod 终止、内核释放描述符后，继任 Pod 才能在首次追加前截断撕裂尾部并继续写入；
+  4. 客户端可用 `conversationId` 继续下一轮，历史由已恢复的 Session 日志与 PVC 会话索引提供。崩溃瞬间未缓冲的 SSE 事件不会重放，`Last-Event-ID` 只能重放新 Pod 内存中已存在的本轮缓冲。
+
+### 5.3 路由、清单与证据边界
+
+- 分片路由由 `packages/nilm/sharding` 实现：对 UTF-8 `tenant_id` 执行 MurmurHash3 x86-32 后按分片数取模；这是取模哈希，不是一致性哈希环。边缘网关必须调用同一函数选择 `nilm-agent-<i>.nilm-agent-headless`；Ingress 本身无法计算 MurmurHash3，不能使用 nginx `upstream-hash-by` 代替。
+- `nilm-service` 在验签后再次校验租户归属，非本分片请求返回 `403 SCOPE_FORBIDDEN` 并写 `tenant-shard-mismatch` 审计。即使边缘路由错误，也不会读写错误分片的 PVC。
+- `deploy/k8s/` 提供 Namespace、StatefulSet、headless Service、Ingress、NetworkPolicy、PDB、ConfigMap 与 Secret 模板。`nilm-edge` 是平台边缘网关的 endpoint 载体，仓库不内置网关实现。
+- **已验证（离线）**：分片函数的固定向量、稳定性与分布；租户目录与跨租户隔离；会话索引跨实例重载；真实 JSONL 后端的撕裂尾部读取；`nilm-service` 的分片拒绝与重启续接用例。
+- **未验证（现场）**：真实 StatefulSet 的 SIGKILL、PVC 重挂与节点迁移；跨进程租约在集群中的释放时序；100 租户边缘路由。离线用例不能替代 G4-2 集群演练报告。
 
 ---
 

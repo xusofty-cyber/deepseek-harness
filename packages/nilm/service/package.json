@@ -28,6 +28,7 @@
     "@deepseek-ai/dsh-llm": "workspace:*",
     "@deepseek-ai/dsh-nilm-core": "workspace:*",
     "@deepseek-ai/dsh-nilm-context": "workspace:*",
+    "@deepseek-ai/dsh-nilm-sharding": "workspace:*",
     "@deepseek-ai/dsh-session": "workspace:*",
     "@deepseek-ai/dsh-session-persistence": "workspace:*",
     "@deepseek-ai/dsh-util-values": "workspace:*",

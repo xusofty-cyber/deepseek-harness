@@ -1,0 +1,127 @@
+# One process per shard, one PVC per shard. StatefulSet's default RollingUpdate
+# terminates nilm-agent-<i> and waits for it to disappear before creating its
+# successor, so a successor never shares a Session with a live predecessor.
+# dsh's JSONL write lease is the second, kernel-level guard.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nilm-agent
+  namespace: nilm
+  labels:
+    app.kubernetes.io/name: nilm-agent
+    app.kubernetes.io/part-of: nilm
+spec:
+  serviceName: nilm-agent-headless
+  # Must equal NILM_SHARD_COUNT in nilm-config.
+  replicas: 4
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nilm-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nilm-agent
+        app.kubernetes.io/part-of: nilm
+    spec:
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: nilm-agent
+      containers:
+        - name: nilm-agent
+          image: ghcr.io/deepseek-ai/nilm-agent:REPLACE_WITH_TAG
+          imagePullPolicy: IfNotPresent
+          # Only a dsh profile launches the application; the bundle entrypoint
+          # never becomes a package bin or argv escape.
+          command: ["dsh"]
+          args: ["--profile", "nilm"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # The bundle derives NILM_SHARD_INDEX from the ordinal suffix.
+            - name: NILM_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # `dsh` rewrites the profile root on every boot; keep its home and
+            # package-manager scratch space on the writable volume.
+            - name: DSH_HOME
+              value: /data/dsh
+            - name: HOME
+              value: /data/home
+            - name: NILM_SESSIONS_ROOT
+              value: /data/sessions
+          envFrom:
+            - configMapRef:
+                name: nilm-config
+            - secretRef:
+                name: nilm-secrets
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 6Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: nilm-agent
+          app.kubernetes.io/part-of: nilm
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
+        # storageClassName is intentionally omitted so the cluster default
+        # applies. A WaitForFirstConsumer class keeps the volume and Pod in the
+        # same zone; an Immediate RWO class can strand a rescheduled Pod on
+        # another node. Confirm the class before relying on recovery.

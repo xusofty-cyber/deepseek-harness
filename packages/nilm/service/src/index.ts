@@ -8,6 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { AlertPage } from '@deepseek-ai/dsh-nilm-sentinel'
 import { Config, resolveConfig, type Config as NilmServiceConfig } from './config.ts'
+import { FileConversationStore, MemoryConversationStore } from './conversations.ts'
 import { NilmHttpService, type AlertListPage } from './http.ts'
 import { CordisNilmRuntime } from './runtime.ts'
 
@@ -50,6 +51,13 @@ export {
 } from './auth.ts'
 export { TurnEventBuffer, type SseEvent, type SseEventType } from './events.ts'
 export {
+  FileConversationStore,
+  MemoryConversationStore,
+  type ConversationStore,
+  type StoredConversation,
+} from './conversations.ts'
+export { tenantPathSegment, tenantSessionRoot } from './paths.ts'
+export {
   CordisNilmRuntime,
   type ChatMessage,
   type NilmAgentEvent,
@@ -67,10 +75,15 @@ export {
 export function apply(ctx: Context, config: NilmServiceConfig): void {
   const resolved = resolveConfig(config)
   const runtime = new CordisNilmRuntime(ctx, resolved)
+  const conversations = resolved.sessionsRoot === undefined
+    ? new MemoryConversationStore()
+    : new FileConversationStore(resolved.sessionsRoot)
   const sentinel = ctx.get('nilmSentinel')
   const service = new NilmHttpService({
     config: resolved,
     runtime,
+    conversations,
+    shard: resolved.shard,
     ready: () => ctx.get('nilmSource') !== undefined
       && ctx.get('nilmAssets') !== undefined
       && ctx.get('nilmTimeseries') !== undefined
@@ -80,6 +93,9 @@ export function apply(ctx: Context, config: NilmServiceConfig): void {
       && ctx.get('agents') !== undefined
       && ctx.get('sessions') !== undefined,
     audit: event => { ctx.logger.warn(`nilm.security ${JSON.stringify(event)}`) },
+    reportBackgroundFailure: (operation, error) => {
+      ctx.logger.error(`${operation} failed: ${error instanceof Error ? error.message : String(error)}`)
+    },
     ...(sentinel === undefined ? {} : {
       alerts: {
         list: async (caller: { tenantId: string; userRef: string }) => alertPageJson(await sentinel.alerts(caller)),

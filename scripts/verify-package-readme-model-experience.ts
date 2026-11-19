@@ -52,6 +52,7 @@ const NO_MODEL_EXPERIENCE_SECTION: Readonly<Record<string, string>> = {
   'packages/nilm/analytics': 'The package only performs deterministic calculations over caller-supplied values; model-facing consumers own authorization, summaries, and result rendering.',
   'packages/nilm/sentinel': 'The package evaluates deterministic rules and writes alerts; the model is never asked whether to alert and its diagnosis is a separate notify-owned enrichment.',
   'packages/nilm/notify': 'The package delivers persisted alerts and conditionally stores a model-authored diagnosis; it never adds model-visible input to a conversation.',
+  'packages/nilm/sharding': 'The package maps tenant ids to shards; it carries no model context, tool, or user-visible output.',
   'packages/nilm/scheduler': 'The package schedules deterministic reports and job runs; a configured one-shot agent may author summary prose, but the model cannot change report numbers or delivery state.',
   'packages/nilm/service': 'The BFF verifies callers and transports turns; the mounted prompt and tool plugins own every model-visible contribution.',
   'packages/bundle/nilm-app': 'The package is a static Cordis composition and startup guard; mounted plugins own model context.',

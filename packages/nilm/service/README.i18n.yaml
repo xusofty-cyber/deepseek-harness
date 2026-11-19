@@ -6,8 +6,8 @@
   en: 8725ffae984546c4
   zh: 01b391c48b6dd038
 /deepseek-ai-dsh-nilm-service/configuration:
-  en: 0c9d4cdce71a5ecd
-  zh: 5e8ed4c2029c2783
+  en: a07cb3b0d537e977
+  zh: 0f7d50e4897aa51f
 /deepseek-ai-dsh-nilm-service/endpoints:
   en: 402a8551914e05e7
   zh: 79183aec1792c92b
@@ -17,6 +17,9 @@
 /deepseek-ai-dsh-nilm-service/sse-replay:
   en: b0372efd27497f10
   zh: 98960eac096d2833
+/deepseek-ai-dsh-nilm-service/pvc-state-and-shard-ownership:
+  en: ee56ddb60b2f5431
+  zh: 7e496b0d08a38151
 /deepseek-ai-dsh-nilm-service/known-limitations-and-deferred-work:
-  en: 62b21e0238e808b7
-  zh: be78c61b045b3300
+  en: a284ab5f71b1a7db
+  zh: 574da091263a3277

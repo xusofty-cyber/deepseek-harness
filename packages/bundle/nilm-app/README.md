@@ -16,7 +16,8 @@ The production tree mounts the BFF instead of a stdio JSON-RPC carrier. Required
 
 ## Known Limitations and Deferred Work
 
-- The BFF keeps nonces, conversation metadata, and turn buffers in process memory. Multi-replica deployment needs Redis nonces and `nilm_conversation` persistence; see the service limitations.
+- The nonce cache, idempotency map, and turn buffers stay in process memory; a restart loses in-flight SSE buffers and `clientMessageId` deduplication.
+- With `NILM_SESSIONS_ROOT` set, the conversation index and Session JSONL live on the shard PVC, and `NILM_SHARD_COUNT` must match the StatefulSet replicas. Redis nonces and a shared idempotency record are still required before one tenant is served by multiple live replicas; see the service limitations.
 - mTLS and `nilm_security_audit` persistence are not part of the stage-1 BFF yet.
 - `mysql2` is an optional peer of `@deepseek-ai/dsh-nilm-source`; the deployment image must install a compatible version before the MySQL probe or a production query runs.
 - Sentinel and notify are mounted, but the 30-second SLO, live `SKIP LOCKED` contention, and WeChat/WeCom/SMS vendor integration still require staged rehearsal with real endpoints.

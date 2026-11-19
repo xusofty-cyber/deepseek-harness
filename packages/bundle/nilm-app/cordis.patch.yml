@@ -55,7 +55,7 @@
     - id: sessions
       name: '@deepseek-ai/dsh-session-persistence-jsonl'
       config:
-        root: !!js dshHomePath('sessions')
+        root: !!js process.env.NILM_SESSIONS_ROOT ?? dshHomePath('sessions')
         compression: none
 
     - id: session-checkpoint-policy
@@ -168,6 +168,9 @@
         host: !!js process.env.NILM_SERVICE_HOST ?? '0.0.0.0'
         port: !!js Number(process.env.NILM_SERVICE_PORT ?? 8080)
         sessionCwd: !!js process.env.NILM_SESSION_CWD ?? process.cwd()
+        sessionsRoot: !!js process.env.NILM_SESSIONS_ROOT
+        shardIndex: !!js Number(process.env.NILM_SHARD_INDEX ?? process.env.NILM_POD_NAME?.split('-').at(-1) ?? 0)
+        shardCount: !!js Number(process.env.NILM_SHARD_COUNT ?? 1)
         provider: !!js process.env.NILM_MODEL_PROVIDER ?? 'deepseek-official'
         model: !!js process.env.NILM_MODEL ?? 'deepseek-chat'
         reasoningModel: !!js process.env.NILM_REASONING_MODEL ?? 'deepseek-reasoner'

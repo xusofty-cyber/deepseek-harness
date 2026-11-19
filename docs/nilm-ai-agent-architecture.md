@@ -682,9 +682,9 @@ sequenceDiagram
 
 dsh Session 持久化采用单写者所有权：同一 Session 不能被两个进程同时写。生产部署必须显式处理这一约束：
 
-1. 以 `tenant_id` 做一致性哈希，将租户固定到 `nilm-agent` 分片；同一租户的会话只落在该分片的 pod。
-2. 新会话由当前分片创建；会话元数据表记录 `session_id -> shard_id`。
-3. Ingress/网关按 `session_id` 或 `tenant_id` 粘性路由；跨分片请求拒绝并返回可重试的重定向。
+1. 对 `tenant_id` 执行 MurmurHash3 x86-32 后按分片数取模，将租户固定到 `nilm-agent` 分片；同一租户的会话只落在该分片的 pod。
+2. 新会话由当前分片创建；PVC 会话索引记录归属，MySQL `nilm_conversation` 尚未接入。
+3. 边缘网关按 `tenant_id` 粘性路由；跨分片请求被 BFF 拒绝为 `403 SCOPE_FORBIDDEN`。
 4. pod 重启后从 PVC 的 JSONL 日志恢复；恢复前确认旧 pod 已终止，避免双写。
 5. 扩容时先增加分片，再迁移租户；迁移使用“排空—归档—切换”流程，不做在线双写。
 6. 定时任务与巡检使用数据库租约或 Kubernetes Lease 选主；同一任务同一时刻只有一个执行者。
@@ -803,7 +803,7 @@ base 的默认能力与本项目的处理：
 | `session-telemetry-otel` / `session-log-deepseek` | 不挂载 | 不向 DeepSeek 上传会话或遥测；这是本项目的数据出口约束 |
 | `session-title` / `session-title-llm` | 不挂载 | 标题由 `nilm_conversation.title` 维护；不额外调用模型 |
 | `jobs` / `spill` / `attachment` | 不挂载 | 定时任务由 `nilm-scheduler` 负责；大结果在 Tool 层限流，不落盘 |
-| `storage` / projection cache | 不挂载 | 会话投影走进程内 `session-projection`；跨进程列表由本项目 MySQL 维护 |
+| `storage` / projection cache | 不挂载 | 会话投影走进程内 `session-projection`；跨进程列表由 PVC 会话索引维护 |
 | `timer` | 挂载 | 最小内核的定时器服务；与 `sdk-minimal` 保持一致 |
 
 建议的最小核心行（名称以仓库实际 package 名为准）：

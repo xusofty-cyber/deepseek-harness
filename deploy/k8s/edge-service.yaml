@@ -1,0 +1,21 @@
+# Endpoint carrier for the platform edge gateway (nilm-edge in the architecture
+# document). A selectorless Service keeps this manifest free of an invented
+# gateway image; the platform team binds its ready endpoints here.
+#
+# The gateway MUST verify or forward the signed NILM envelope unchanged and
+# select the upstream with:
+#   nilm-agent-<murmur3x86_32(tenant_id) % NILM_SHARD_COUNT>.nilm-agent-headless
+# A misrouted request is rejected by nilm-service after signature verification,
+# so a routing bug cannot write a tenant Session onto the wrong PVC.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nilm-edge
+  namespace: nilm
+  labels:
+    app.kubernetes.io/name: nilm-edge
+spec:
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

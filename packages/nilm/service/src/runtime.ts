@@ -8,10 +8,12 @@ import type { Agent, AgentHandle, AssistantStreamFrame } from '@deepseek-ai/dsh-
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { NilmError, type CallContext } from '@deepseek-ai/dsh-nilm-core'
+import type {} from '@deepseek-ai/dsh-nilm-context'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ResolvedConfig } from './config.ts'
+import { tenantSessionRoot } from './paths.ts'
 
 /** Model posture requested by the caller; it never changes Tool authority. */
 export type TurnMode = 'auto' | 'reasoner'
@@ -64,6 +66,16 @@ export interface NilmAgentRuntime {
    * @returns the live session surface.
    */
   open(sessionId: string, callContext: CallContext, mode: TurnMode): Promise<NilmAgentSession>
+
+  /**
+   * Read the persisted history of one conversation without inventing an empty
+   * transcript for a conversation whose first turn never reached the log.
+   * @param sessionId - conversation/session identity.
+   * @param callContext - verified caller identity; its tenant must own the session.
+   * @param mode - model posture used when the runtime must resume the session.
+   * @returns the visible history, or `undefined` when no session is persisted.
+   */
+  history(sessionId: string, callContext: CallContext, mode: TurnMode): Promise<readonly ChatMessage[] | undefined>
 }
 
 /** Cordis-backed runtime implementation. */
@@ -106,24 +118,62 @@ export class CordisNilmRuntime implements NilmAgentRuntime {
       existing.select(mode)
       return existing
     }
-    const handle = await this.openHandle(sessionId, mode)
+    const handle = await this.openHandle(sessionId, callContext.tenantId, mode)
     const runtimeSession = new RuntimeSession(this.ctx, handle.agent, callContext, mode, this.config)
     this.sessions.set(sessionId, runtimeSession)
     return runtimeSession
   }
 
-  private async openHandle(sessionId: string, mode: TurnMode): Promise<AgentHandle> {
+  /**
+   * Read persisted history after a restart. The caller-owned conversation
+   * record survives in the PVC store, so the session can be resumed lazily.
+   * @param sessionId - conversation identity.
+   * @param callContext - verified caller identity.
+   * @param mode - model posture used for the resumed agent.
+   * @returns visible messages, or `undefined` before the first persisted turn.
+   */
+  async history(sessionId: string, callContext: CallContext, mode: TurnMode): Promise<readonly ChatMessage[] | undefined> {
+    const id = brandString<SessionId>(sessionId)
+    const persisted = await this.ctx.get('sessionPersistence')?.stat(id)
+    if (persisted === undefined) return undefined
+    this.assertTenantSession(persisted.header.cwd, callContext.tenantId)
+    const session = await this.open(sessionId, callContext, mode)
+    return session.messages()
+  }
+
+  private async openHandle(sessionId: string, tenantId: string, mode: TurnMode): Promise<AgentHandle> {
     const id = brandString<SessionId>(sessionId)
     const persisted = await this.ctx.get('sessionPersistence')?.stat(id)
     const agentOptions = this.route(mode)
     if (persisted !== undefined) {
+      this.assertTenantSession(persisted.header.cwd, tenantId)
       return this.ctx.agents.resume({ resumeSessionId: id, agentOptions })
     }
     return this.ctx.agents.create({
       sessionId: id,
-      meta: { cwd: this.config.sessionCwd },
+      meta: { cwd: this.sessionCwd(tenantId) },
       agentOptions,
     })
+  }
+
+  private sessionCwd(tenantId: string): string {
+    return this.config.sessionsRoot === undefined
+      ? this.config.sessionCwd
+      : tenantSessionRoot(this.config.sessionsRoot, tenantId)
+  }
+
+  /**
+   * Refuse to resume a Session stored outside the caller tenant's directory.
+   * The conversation index is tenant-scoped, so this is a second, independent
+   * guard against a forged or copied conversation id.
+   * @param cwd - stored Session working directory.
+   * @param tenantId - verified caller tenant.
+   */
+  private assertTenantSession(cwd: string | undefined, tenantId: string): void {
+    if (this.config.sessionsRoot === undefined) return
+    if (cwd !== this.sessionCwd(tenantId)) {
+      throw new NilmError('SCOPE_FORBIDDEN', 'conversation belongs to another tenant directory')
+    }
   }
 
   private route(mode: TurnMode): { provider: string; model: string } {

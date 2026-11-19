@@ -15281,6 +15281,9 @@ importers:
       '@deepseek-ai/dsh-nilm-sentinel':
         specifier: workspace:*
         version: link:../sentinel
+      '@deepseek-ai/dsh-nilm-sharding':
+        specifier: workspace:*
+        version: link:../sharding
       '@deepseek-ai/dsh-session':
         specifier: workspace:*
         version: link:../../core/session
@@ -15297,6 +15300,8 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:~
         version: link:../../../vendor/cordis
+
+  packages/nilm/sharding: {}
 
   packages/nilm/source:
     dependencies:

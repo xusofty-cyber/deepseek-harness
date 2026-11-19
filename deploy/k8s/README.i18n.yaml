@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write deploy/k8s/README.md
+/:
+  en: a53e2303518fd68a
+  zh: cbbcde5d4cb91a74
+/nilm-agent-kubernetes-deployment:
+  en: 6733bd30cb0ec120
+  zh: 6e1e044ae3ab8ca1
+/nilm-agent-kubernetes-deployment/files:
+  en: 73d30da97bb0a106
+  zh: 7ada9ca8ccabb8c2
+/nilm-agent-kubernetes-deployment/deploy-order:
+  en: 3882a7784bc3582c
+  zh: 5c80307770d8c972
+/nilm-agent-kubernetes-deployment/shard-count-and-pvc-topology:
+  en: 66f5c567843f55a7
+  zh: f46b78d383eef592
+/nilm-agent-kubernetes-deployment/tenant-migration-and-drain:
+  en: 68c3115145ef1388
+  zh: fe6a7a95515d3498
+/nilm-agent-kubernetes-deployment/g4-2-recovery-rehearsal:
+  en: 0b34a8d9140ba315
+  zh: 6005c0cfc5f631fc
+/nilm-agent-kubernetes-deployment/evidence-status:
+  en: d1fbb6e61b3c1a07
+  zh: 2917e14641248f6a
