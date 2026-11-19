@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { NilmError, type CallContext, type SessionId, type TenantId, type TimeRangeSpec } from '@deepseek-ai/dsh-nilm-core'
 import {
   NilmTariffService,
+  SourceTariffRepository,
   parseClockMinutes,
   selectEffectivePlan,
   splitRangeByTariff,
@@ -230,5 +231,31 @@ describe('NilmTariffService', () => {
       .rejects.toMatchObject({ code: 'DATA_UNAVAILABLE' })
     await expect(service.splitByTariff(callContext(), { ...range(), timeZone: 'UTC' as never }))
       .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+  })
+
+  it('filters tariff periods by tenant as well as plan id', async () => {
+    const calls: Array<{ sql: string; params: readonly unknown[] | undefined }> = []
+    const source = {
+      async queryLocalReadOnly<T>(sql: string, params?: readonly unknown[]): Promise<T[]> {
+        calls.push({ sql, params })
+        const rows = sql.includes('FROM nilm_tariff_plan')
+          ? [{ planId: 'plan-1', effectiveFrom: '2026-07-01', effectiveTo: null }]
+          : [{
+              planId: 'plan-1',
+              season: 'summer',
+              dayType: 'workday',
+              periodType: 'flat',
+              start: '08:00',
+              end: '20:00',
+              price: 1,
+            }]
+        return rows as T[]
+      },
+    }
+    const repository = new SourceTariffRepository(() => source)
+    const loaded = await repository.getPlan('tenant-a', 'plan-1')
+    expect(loaded?.periods).toHaveLength(1)
+    expect(calls[1]!.sql).toContain('tenant_id = ?')
+    expect(calls[1]!.params).toEqual(['tenant-a', 'plan-1'])
   })
 })

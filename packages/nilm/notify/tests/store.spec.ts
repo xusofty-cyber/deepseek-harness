@@ -93,6 +93,9 @@ describe('MySQL outbox store', () => {
     const update = db.statements.find(statement => statement.sql.includes('nilm_report'))
     expect(update?.sql).toContain("status = 'delivered'")
     expect(update?.params).toEqual([new Date(2_000), 'tenant-a', 'report_1'])
+    const record = db.statements.find(statement => statement.sql.includes('nilm_notification_record'))
+    expect(record?.sql).toContain('tenant_id, user_ref, channel')
+    expect(record?.params?.slice(0, 4)).toEqual(['report_1', 'tenant-a', 'user-1', 'wx_subscribe'])
   })
 
   it('does not update a report for alert-only delivery or a lost lease', async () => {

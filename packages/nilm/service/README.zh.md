@@ -15,7 +15,7 @@
 | `POST` | `/v1/conversations` | 创建服务端签发的 `conversationId` |
 | `GET` | `/v1/conversations` | 按更新时间倒序列出调用方会话 |
 | `GET` | `/v1/conversations/{id}/messages` | 返回调用方可见的用户与助手历史 |
-| `POST` | `/v1/turns` | 受理一条消息并返回 `202` 与 `turnId`、`sessionId`、`conversationId`、`streamUrl`；重复 `clientMessageId` 返回同一轮 |
+| `POST` | `/v1/turns` | 受理一条消息并返回 `202` 与 `turnId`、`sessionId`、`conversationId`、`streamUrl`；完成后重复提交返回同一轮，处理中的并发重复提交返回 `429 RATE_LIMITED` |
 | `GET` | `/v1/turns/{id}/stream` | SSE 流，带单调 id、`Last-Event-ID` 重放与 `ping` 心跳 |
 | `POST` | `/v1/turns/{id}/cancel` | 取消当前生成并返回 `204` |
 | `GET` | `/v1/alerts` | 挂载 Sentinel 时列出调用方可见告警；否则报告 `available: false` |

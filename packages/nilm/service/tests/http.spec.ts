@@ -24,6 +24,58 @@ import {
   TENANT_B,
 } from './support/harness.ts'
 
+class BlockingRuntime extends FakeRuntime {
+  private releaseOpen!: () => void
+  private markOpenStarted!: () => void
+  private readonly gate = new Promise<void>(resolve => { this.releaseOpen = resolve })
+  private readonly started = new Promise<void>(resolve => { this.markOpenStarted = resolve })
+
+  override async open(...args: Parameters<FakeRuntime['open']>): ReturnType<FakeRuntime['open']> {
+    this.markOpenStarted()
+    await this.gate
+    return super.open(...args)
+  }
+
+  release(): void {
+    this.releaseOpen()
+  }
+
+  awaitOpen(): Promise<void> {
+    return this.started
+  }
+}
+
+class FailingOnceRuntime extends FakeRuntime {
+  failNext = true
+
+  override async open(...args: Parameters<FakeRuntime['open']>): ReturnType<FakeRuntime['open']> {
+    if (this.failNext) {
+      this.failNext = false
+      throw new Error('runtime open failed')
+    }
+    return super.open(...args)
+  }
+}
+
+class FailingSendSession extends FakeSession {
+  failNext = true
+
+  override send(text: string): void {
+    if (this.failNext) {
+      this.failNext = false
+      throw new Error('session send failed')
+    }
+    super.send(text)
+  }
+}
+
+class FailingSendRuntime extends FakeRuntime {
+  override async open(...args: Parameters<FakeRuntime['open']>): ReturnType<FakeRuntime['open']> {
+    if (!this.sessions.has(args[0])) this.sessions.set(args[0], new FailingSendSession(args[0]))
+    return super.open(...args)
+  }
+}
+
 describe('NILM BFF HTTP/SSE', () => {
   it('serves health and readiness without caller envelopes', async () => {
     const runtime = new FakeRuntime()
@@ -157,6 +209,58 @@ describe('NILM BFF HTTP/SSE', () => {
       expect(cancel.status).toBe(204)
       expect(session.cancelled).toBe(1)
       session.emit({ type: 'turn-end', reason: 'aborted' })
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('reserves a clientMessageId before awaits so concurrent retries cannot start twice', async () => {
+    const runtime = new BlockingRuntime()
+    const service = newService(runtime)
+    try {
+      const conversationId = await createConversation(service)
+      const body = Buffer.from(JSON.stringify({ conversationId, clientMessageId: 'client-race', content: '查询昨日用电' }))
+      const first = call(service, 'POST', '/v1/turns', body, TENANT_A, SECRET_A)
+      await runtime.awaitOpen()
+      const second = await call(service, 'POST', '/v1/turns', body, TENANT_A, SECRET_A)
+      expect(second.status).toBe(429)
+      expect(JSON.parse(second.body)).toMatchObject({ code: 'RATE_LIMITED' })
+      expect(second.body).toContain('already being processed')
+      runtime.release()
+      expect((await first).status).toBe(202)
+      expect(runtime.opens).toBe(1)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('releases a clientMessageId reservation when turn creation fails', async () => {
+    const runtime = new FailingOnceRuntime()
+    const service = newService(runtime)
+    try {
+      const conversationId = await createConversation(service)
+      const body = Buffer.from(JSON.stringify({ conversationId, clientMessageId: 'client-retry', content: '查询昨日用电' }))
+      expect((await call(service, 'POST', '/v1/turns', body, TENANT_A, SECRET_A)).status).toBe(500)
+      expect((await call(service, 'POST', '/v1/turns', body, TENANT_A, SECRET_A)).status).toBe(202)
+      expect(runtime.opens).toBe(1)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('finalizes a turn and releases its conversation when send fails synchronously', async () => {
+    const runtime = new FailingSendRuntime()
+    const service = newService(runtime)
+    try {
+      const conversationId = await createConversation(service)
+      const body = Buffer.from(JSON.stringify({ conversationId, clientMessageId: 'client-send', content: '查询昨日用电' }))
+      expect((await call(service, 'POST', '/v1/turns', body, TENANT_A, SECRET_A)).status).toBe(500)
+      const retry = await call(service, 'POST', '/v1/turns', body, TENANT_A, SECRET_A)
+      expect(retry.status).toBe(202)
+      expect(JSON.parse(retry.body)).toMatchObject({ idempotent: false })
+      expect(runtime.opens).toBe(2)
+      const session = runtime.sessions.get(conversationId) as FailingSendSession
+      expect(session.sent).toEqual(['查询昨日用电'])
     } finally {
       await service.close()
     }

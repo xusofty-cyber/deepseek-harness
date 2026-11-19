@@ -145,6 +145,10 @@ const MAX_EVENT_BYTES = 64 * 1024
 const MAX_TEXT_CHARS = 20_000
 const IDEMPOTENCY_TTL_MS = 86_400_000
 
+type IdempotencyEntry =
+  | { readonly status: 'pending'; readonly expiresAt: number }
+  | { readonly status: 'complete'; readonly turnId: string; readonly expiresAt: number }
+
 /** In-process BFF HTTP service. */
 export class NilmHttpService {
   private readonly server: Server
@@ -155,7 +159,8 @@ export class NilmHttpService {
   private readonly store: ConversationStore
   private readonly tenantLoads = new Map<string, Promise<void>>()
   private readonly turns = new Map<string, TurnRecord>()
-  private readonly idempotency = new Map<string, { turnId: string; expiresAt: number }>()
+  private readonly idempotency = new Map<string, IdempotencyEntry>()
+  private readonly pendingConversations = new Set<string>()
   private readonly streams = new Set<NilmHttpResponse>()
   private readonly pendingWrites = new Set<Promise<void>>()
   private readonly auditedFailures = new WeakSet<object>()
@@ -372,79 +377,94 @@ export class NilmHttpService {
     this.pruneIdempotency(now)
     const idempotencyKey = `${caller.tenantId}\n${caller.userRef}\n${parsed.clientMessageId}`
     const previous = this.idempotency.get(idempotencyKey)
-    const previousTurn = previous === undefined ? undefined : this.turns.get(previous.turnId)
-    if (previousTurn !== undefined) {
-      if (previousTurn.tenantId !== caller.tenantId || previousTurn.userRef !== caller.userRef) {
-        throw new NilmError('SCOPE_FORBIDDEN', 'clientMessageId belongs to another caller')
+    if (previous?.status === 'pending') {
+      throw new NilmError('RATE_LIMITED', 'clientMessageId is already being processed; retry after the current request completes')
+    }
+    if (previous?.status === 'complete') {
+      const previousTurn = this.turns.get(previous.turnId)
+      if (previousTurn !== undefined) {
+        if (previousTurn.tenantId !== caller.tenantId || previousTurn.userRef !== caller.userRef) {
+          throw new NilmError('SCOPE_FORBIDDEN', 'clientMessageId belongs to another caller')
+        }
+        this.sendAccepted(res, previousTurn, true)
+        return
       }
-      this.sendAccepted(res, previousTurn, true)
-      return
+      this.idempotency.delete(idempotencyKey)
     }
-    const conversation = parsed.conversationId === undefined
-      ? await this.newConversation(caller)
-      : await this.conversationFor(caller, parsed.conversationId)
-    if (conversation.activeTurnId !== undefined) {
-      throw new NilmError('INVALID_ARGUMENT', 'conversation already has an active turn')
-    }
-    const agent = await this.options.runtime.open(conversation.id, {
-      tenantId: caller.tenantId,
-      userRef: caller.userRef,
-      requestId: caller.requestId,
-      sessionId: brandString<SessionId>(conversation.sessionId),
-      ...(caller.allowedScope === undefined ? {} : { allowedScope: caller.allowedScope }),
-    }, parsed.mode)
-    const turnId = `turn_${randomBytes(12).toString('hex')}`
-    const buffer = new TurnEventBuffer(turnId, conversation.sessionId)
-    let turn!: TurnRecord
-    const timeout = setTimeout(() => {
-      if (turn.finished) return
-      agent.cancel()
-      this.append(turn, 'error', {
-        turnId: turn.id,
-        code: 'MODEL_TIMEOUT',
-        message: '本轮回答超时，已取消生成',
-        retryable: true,
-      })
-      turn.hadError = true
-      this.finalizeTurn(turn)
-    }, this.options.config.turnTimeoutMs)
-    timeout.unref()
-    turn = {
-      id: turnId,
-      conversationId: conversation.id,
-      tenantId: caller.tenantId,
-      userRef: caller.userRef,
-      requestId: caller.requestId,
-      createdAt: now,
-      buffer,
-      agent,
-      unsubscribe: agent.subscribe(event => { this.onAgentEvent(turn, event) }),
-      timeout,
-      text: '',
-      messageHadDelta: false,
-      hadError: false,
-      finished: false,
-    }
-    this.turns.set(turnId, turn)
-    conversation.agent = agent
-    conversation.activeTurnId = turnId
-    conversation.updatedAt = now
-    this.idempotency.set(idempotencyKey, { turnId, expiresAt: now + IDEMPOTENCY_TTL_MS })
-    this.append(turn, 'status', { turnId, phase: 'accepted', message: '已受理' })
+    this.idempotency.set(idempotencyKey, { status: 'pending', expiresAt: now + IDEMPOTENCY_TTL_MS })
+    let conversation: ConversationRecord | undefined
     try {
-      agent.send(parsed.content)
-    } catch (error) {
-      this.append(turn, 'error', {
-        turnId,
-        code: 'INTERNAL_ERROR',
-        message: '无法提交本轮消息',
-        retryable: false,
-      })
-      turn.hadError = true
-      this.finalizeTurn(turn)
-      throw error
+      conversation = parsed.conversationId === undefined
+        ? await this.newConversation(caller)
+        : await this.conversationFor(caller, parsed.conversationId)
+      if (conversation.activeTurnId !== undefined || this.pendingConversations.has(conversation.id)) {
+        throw new NilmError('INVALID_ARGUMENT', 'conversation already has an active turn')
+      }
+      this.pendingConversations.add(conversation.id)
+      const agent = await this.options.runtime.open(conversation.id, {
+        tenantId: caller.tenantId,
+        userRef: caller.userRef,
+        requestId: caller.requestId,
+        sessionId: brandString<SessionId>(conversation.sessionId),
+        ...(caller.allowedScope === undefined ? {} : { allowedScope: caller.allowedScope }),
+      }, parsed.mode)
+      const turnId = `turn_${randomBytes(12).toString('hex')}`
+      const buffer = new TurnEventBuffer(turnId, conversation.sessionId)
+      let turn!: TurnRecord
+      const timeout = setTimeout(() => {
+        if (turn.finished) return
+        agent.cancel()
+        this.append(turn, 'error', {
+          turnId: turn.id,
+          code: 'MODEL_TIMEOUT',
+          message: '本轮回答超时，已取消生成',
+          retryable: true,
+        })
+        turn.hadError = true
+        this.finalizeTurn(turn)
+      }, this.options.config.turnTimeoutMs)
+      timeout.unref()
+      turn = {
+        id: turnId,
+        conversationId: conversation.id,
+        tenantId: caller.tenantId,
+        userRef: caller.userRef,
+        requestId: caller.requestId,
+        createdAt: now,
+        buffer,
+        agent,
+        unsubscribe: agent.subscribe(event => { this.onAgentEvent(turn, event) }),
+        timeout,
+        text: '',
+        messageHadDelta: false,
+        hadError: false,
+        finished: false,
+      }
+      this.turns.set(turnId, turn)
+      conversation.agent = agent
+      conversation.activeTurnId = turnId
+      conversation.updatedAt = now
+      this.append(turn, 'status', { turnId, phase: 'accepted', message: '已受理' })
+      try {
+        agent.send(parsed.content)
+      } catch (error) {
+        this.append(turn, 'error', {
+          turnId,
+          code: 'INTERNAL_ERROR',
+          message: '无法提交本轮消息',
+          retryable: false,
+        })
+        turn.hadError = true
+        this.finalizeTurn(turn)
+        throw error
+      }
+      this.idempotency.set(idempotencyKey, { status: 'complete', turnId, expiresAt: now + IDEMPOTENCY_TTL_MS })
+      this.sendAccepted(res, turn, false)
+    } finally {
+      if (conversation !== undefined) this.pendingConversations.delete(conversation.id)
+      const entry = this.idempotency.get(idempotencyKey)
+      if (entry?.status === 'pending') this.idempotency.delete(idempotencyKey)
     }
-    this.sendAccepted(res, turn, false)
   }
 
   private sendAccepted(res: NilmHttpResponse, turn: TurnRecord, idempotent: boolean): void {

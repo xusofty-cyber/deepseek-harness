@@ -242,7 +242,7 @@ interface NilmDataQuality {
 | 表（建议） | 关键字段 | 说明 |
 | :--- | :--- | :--- |
 | `nilm_tariff_plan` | `tenant_id`, `plan_id`, `effective_from`, `effective_to`, `region`, `voltage_level` | 一个租户在同一时间只有一个生效计划 |
-| `nilm_tariff_period` | `plan_id`, `season`, `day_type`, `period_type`, `start_time`, `end_time`, `price` | `period_type` 为尖/峰/平/谷；支持一天多段 |
+| `nilm_tariff_period` | `tenant_id`, `plan_id`, `season`, `day_type`, `period_type`, `start_time`, `end_time`, `price` | `period_type` 为尖/峰/平/谷；支持一天多段 |
 | `nilm_calendar_day` | `tenant_id`, `date`, `day_type`, `season`, `shift_json` | 工作日、周末、节假日、电价季节与生产班次 |
 | `nilm_pf_policy` | `tenant_id`, `effective_from`, `threshold`, `reward_rule`, `penalty_rule` | 默认 0.90，但公式与阈值按当地规则配置 |
 

@@ -116,6 +116,19 @@ describe('scheduler jobs', () => {
     expect(repo.outbox).toHaveLength(1)
   })
 
+  it('delivers one outbox row per recipient on the same channel', async () => {
+    const recipients = [
+      { userRef: 'user-1', channel: 'wx_subscribe', masked: '138****0000' },
+      { userRef: 'user-2', channel: 'wx_subscribe', masked: '139****0000' },
+    ]
+    const shared = tenant({ notificationPolicy: { recipients } })
+    const { service, repo, data } = setup({ now: MORNING, tenants: [shared] })
+    seedMorning(data)
+    await service.runJob('morning_report', shared, MORNING)
+    expect(repo.outbox).toHaveLength(2)
+    expect(new Set(repo.outbox.map(row => row.userRef))).toEqual(new Set(['user-1', 'user-2']))
+  })
+
   it('runs R-08 and R-07 in one sweep without customer delivery for quality findings', async () => {
     const { service, repo, data } = setup({ now: MORNING })
     seedMorning(data)

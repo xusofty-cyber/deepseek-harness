@@ -2,10 +2,10 @@
 
 ## 0. 模块导读与设计基线
 
-- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-requirements.md) §FR-5
-- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-architecture.md) §4.4, §8
-- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-high-level-design.md) §2.4, §7
-- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-development-plan.md) §5 阶段 3
+- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](./nilm-ai-agent-requirements.md) §FR-5
+- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](./nilm-ai-agent-architecture.md) §4.4, §8
+- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](./nilm-ai-agent-high-level-design.md) §2.4, §7
+- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](./nilm-ai-agent-development-plan.md) §5 阶段 3
 - **涵盖代码包**：
   - `packages/nilm/sentinel/`（5秒增量安全扫描、日历基线、R-01~R-05 规则引擎、抑制升级状态机）
   - `packages/nilm/notify/`（Outbox 并发调度器、四渠道适配、分级指数退避、Agent 异步研判）

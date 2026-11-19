@@ -15163,7 +15163,7 @@ importers:
         specifier: workspace:*
         version: link:../source
       '@deepseek-ai/schemastery':
-        specifier: link:../../../vendor/schemastery
+        specifier: workspace:~
         version: link:../../../vendor/schemastery
     devDependencies:
       '@deepseek-ai/cordis':
@@ -15229,7 +15229,7 @@ importers:
         specifier: workspace:*
         version: link:../timeseries
       '@deepseek-ai/schemastery':
-        specifier: link:../../../vendor/schemastery
+        specifier: workspace:~
         version: link:../../../vendor/schemastery
     devDependencies:
       '@deepseek-ai/cordis':
@@ -15254,7 +15254,7 @@ importers:
         specifier: workspace:*
         version: link:../timeseries
       '@deepseek-ai/schemastery':
-        specifier: link:../../../vendor/schemastery
+        specifier: workspace:~
         version: link:../../../vendor/schemastery
     devDependencies:
       '@deepseek-ai/cordis':
@@ -15294,7 +15294,7 @@ importers:
         specifier: workspace:*
         version: link:../../util/values
       '@deepseek-ai/schemastery':
-        specifier: link:../../../vendor/schemastery
+        specifier: workspace:~
         version: link:../../../vendor/schemastery
     devDependencies:
       '@deepseek-ai/cordis':
@@ -15350,7 +15350,7 @@ importers:
         specifier: workspace:*
         version: link:../source
       '@deepseek-ai/schemastery':
-        specifier: link:../../../vendor/schemastery
+        specifier: workspace:~
         version: link:../../../vendor/schemastery
     devDependencies:
       '@deepseek-ai/cordis':
@@ -15387,7 +15387,7 @@ importers:
         specifier: workspace:*
         version: link:../../util/values
       '@deepseek-ai/schemastery':
-        specifier: link:../../../vendor/schemastery
+        specifier: workspace:~
         version: link:../../../vendor/schemastery
     devDependencies:
       '@deepseek-ai/cordis':

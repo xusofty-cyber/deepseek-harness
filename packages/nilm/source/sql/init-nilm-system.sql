@@ -214,8 +214,8 @@ CREATE TABLE `nilm_notification_outbox` (
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `sent_at` DATETIME DEFAULT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_tenant_notification_channel` (`tenant_id`, `notification_id`, `channel`),
-  UNIQUE KEY `uk_tenant_dedupe_channel` (`tenant_id`, `dedupe_key`, `channel`),
+  UNIQUE KEY `uk_tenant_notification_user_channel` (`tenant_id`, `notification_id`, `user_ref`, `channel`),
+  UNIQUE KEY `uk_tenant_dedupe_user_channel` (`tenant_id`, `dedupe_key`, `user_ref`, `channel`),
   KEY `idx_claim` (`status`, `next_retry_at`, `lease_expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通知 Outbox';
 
@@ -223,6 +223,7 @@ CREATE TABLE `nilm_notification_record` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `notification_id` VARCHAR(64) NOT NULL,
   `tenant_id` VARCHAR(64) NOT NULL,
+  `user_ref` VARCHAR(64) DEFAULT NULL COMMENT '接收主体引用',
   `channel` ENUM('wx_subscribe', 'wx_template', 'wecom_webhook', 'sms') NOT NULL,
   `recipient_masked` VARCHAR(64) DEFAULT NULL,
   `event_id` VARCHAR(64) DEFAULT NULL,
@@ -232,7 +233,7 @@ CREATE TABLE `nilm_notification_record` (
   `sent_at` DATETIME DEFAULT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_tenant_notification_channel` (`tenant_id`, `notification_id`, `channel`),
+  UNIQUE KEY `uk_tenant_notification_user_channel` (`tenant_id`, `notification_id`, `user_ref`, `channel`),
   KEY `idx_tenant_time` (`tenant_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='渠道投递审计；保留至少180天';
 
@@ -294,6 +295,7 @@ CREATE TABLE `nilm_tariff_plan` (
 
 CREATE TABLE `nilm_tariff_period` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `tenant_id` VARCHAR(64) NOT NULL,
   `plan_id` VARCHAR(64) NOT NULL,
   `season` VARCHAR(16) NOT NULL,
   `day_type` VARCHAR(16) NOT NULL,
@@ -303,7 +305,7 @@ CREATE TABLE `nilm_tariff_period` (
   `price` DECIMAL(10, 4) NOT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_plan_period` (`plan_id`, `season`, `day_type`, `period_type`, `start_time`)
+  UNIQUE KEY `uk_tenant_plan_period` (`tenant_id`, `plan_id`, `season`, `day_type`, `period_type`, `start_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='分时电价时段';
 
 CREATE TABLE `nilm_calendar_day` (

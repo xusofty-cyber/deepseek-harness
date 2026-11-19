@@ -2,10 +2,10 @@
 
 ## 0. 模块导读与设计基线
 
-- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-requirements.md) §FR-3, §FR-5, §NFR-6
-- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-architecture.md) §4.5, §7, §8, §9
-- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-high-level-design.md) §2.5, §6, §8
-- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-development-plan.md) §6 阶段 4
+- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](./nilm-ai-agent-requirements.md) §FR-3, §FR-5, §NFR-6
+- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](./nilm-ai-agent-architecture.md) §4.5, §7, §8, §9
+- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](./nilm-ai-agent-high-level-design.md) §2.5, §6, §8
+- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](./nilm-ai-agent-development-plan.md) §6 阶段 4
 - **涵盖代码包与配置目录**：
   - `packages/nilm/scheduler/`（Cron 调度器、租约选主、08:30 晨报流水线、力调预测、R-08 数据质量巡检）
   - `deploy/k8s/`（StatefulSet, Headless Service, PVC, Ingress, NetworkPolicy）

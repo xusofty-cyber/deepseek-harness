@@ -407,6 +407,8 @@ export function applyTools(ctx: NilmToolHost): void {
         ? undefined
         : await compareEnergy(ctx, callContext, resolution.meterSet, range, args.compare, includeCost, exec.signal)
       const dataQuality = energy.dataQuality
+      const partialEnergy = energy.warnings.some(warning =>
+        warning.includes('energy rows were capped') || warning.includes('daily statistics rows were capped'))
       const facts = {
         scope: resolution.matched[0],
         range: dateRange(range),
@@ -419,10 +421,11 @@ export function applyTools(ctx: NilmToolHost): void {
         series,
       }
       const chart = energyChart(resolution.resolvedPath ?? describe(target), energy.buckets)
+      const summaryText = totalEnergyKwh === null
+        ? `范围“${resolution.resolvedPath ?? describe(target)}”在 ${dateRange(range)} 没有可用电量数据，未以 0 代替`
+        : `范围“${resolution.resolvedPath ?? describe(target)}”在 ${dateRange(range)} 用电 ${totalEnergyKwh.toFixed(3)} kWh${cost === undefined ? '' : `，电费 ${cost.totalCost.toFixed(2)} 元`}`
       return canonicalJson({
-        summaryText: totalEnergyKwh === null
-          ? `范围“${resolution.resolvedPath ?? describe(target)}”在 ${dateRange(range)} 没有可用电量数据，未以 0 代替`
-          : `范围“${resolution.resolvedPath ?? describe(target)}”在 ${dateRange(range)} 用电 ${totalEnergyKwh.toFixed(3)} kWh${cost === undefined ? '' : `，电费 ${cost.totalCost.toFixed(2)} 元`}`,
+        summaryText: partialEnergy ? `${summaryText}（受采样上限截断，仅为部分窗口）` : summaryText,
         facts,
         dataQuality,
         warnings,

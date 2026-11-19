@@ -1,7 +1,7 @@
 # Session: 2026-11-19
 
 **Started:** 2026-11-19 (Asia/Shanghai)
-**Last Updated:** 2026-11-19 11:25 CST
+**Last Updated:** 2026-11-19 14:45 CST
 **Project:** `/home/picohood/projects/opensource/deepseek-harness`
 **Topic:** NILM WBS 4.4 补强：共享安全审计 seam、Tool 拒绝落库与调用方标识上界
 
@@ -19,6 +19,34 @@
 - 验签链增加租户/用户 64 字符与请求 id 128 字符上限，避免超长值导致整批审计失败或日志膨胀。
 
 G4-4 现场门仍未通过：真实 MySQL 落库、真实双租户复验、生产日志留存、KMS/AES-GCM、审计一年保留与安全负责人签署均未执行。
+
+---
+
+## Review Remediation (uncommitted worktree)
+
+本轮按上一轮代码审查修复了以下问题，基线为已提交的 `f183def525`：
+
+- **跨租户电价** — `nilm_tariff_period` 增加 `tenant_id` 并使用租户化唯一键；`SourceTariffRepository` 查询时段时绑定租户，新增回归断言。
+- **同渠道多接收人丢告警/报告** — Outbox 与投递记录唯一键纳入 `user_ref`；投递记录写入 `user_ref`；调度器与哨兵均新增同渠道双接收人用例。
+- **`clientMessageId` 并发与失败毒化** — BFF 幂等状态拆为 pending/complete，首个异步操作前占用 pending；并发重试返回可重试的 `429`；失败在 `finally` 释放；同一会话在 `runtime.open` 期间禁止并发建轮。
+- **复审 P2：发送失败后的 turn 泄漏** — `agent.send()` 同步抛错时记录 `INTERNAL_ERROR`、完成 turn 收尾并释放会话；新增发送失败后同键重试成功的用例。
+- **复审 P3：pending 幂等语义** — 处理中的并发重复提交改为可重试的 `429 RATE_LIMITED`；中英文 README、高层设计与错误码表同步说明。
+- **复审 P3：测试缩进** — 并发幂等用例恢复 6 空格层级，符合 `.oxlintrc.json` 的 2 空格缩进规则；最终复审判定 PASS。
+- **电量截断误导** — 聚合电量与日统计查询超采样上限时产生告警；`nilm_energy_query` 在摘要中明确“仅部分窗口”。
+- **appliance 无 terminal 祖先** — 改为抛 `DATA_UNAVAILABLE`，不再把 `undefined` 断言成 `TerminalId`。
+- **vendor 依赖声明** — 六个 NILM 包的 `@deepseek-ai/schemastery` 统一为 `workspace:~`，`pnpm-lock.yaml` 对应六处 importer 已同步。
+- **文档门禁** — 阶段设计文档加入 translation-pairing 排除清单；文档内 `file://` 绝对链接改为相对链接；高层设计与架构文档同步租户化 DDL。
+
+验证证据（2026-11-19 14:38 CST）：
+
+- **全量 NILM** — `45` 个测试文件、`378` 通过、`1` 跳过（沙箱回环限制），零失败。
+- **NILM 源码类型检查** — 临时 `noEmit` 配置下 `packages/nilm/*/src` 零错误；整体退出码 2 仍来自仓库其他包缺失 `zod` 等既有依赖。
+- **NILM 测试类型检查** — 仅剩既有 `recovery.spec.ts` 无法解析 `@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts`。
+- **锁文件断言** — 六个包 manifest 与 lockfile importer 的 `schemastery` 声明均为 `workspace:~`，无不一致项。
+- **文档门禁** — translation pairing、limitations、model experience、doc refs、doc budgets、md links 六项全部退出 0。
+- **`git diff --check`** — 通过。
+- **依赖策略门禁** — 未能启动：当前安装缺 `@jridgewell/gen-mapping`（脚本在导入阶段退出），不是检测到的违规。
+- **`oxlint`** — 未执行：当前安装缺 `node_modules/oxlint`；缩进规则已按配置静态核对，不能声称 lint 已运行。
 
 ---
 
@@ -100,27 +128,13 @@ G4-4 现场门仍未通过：真实 MySQL 落库、真实双租户复验、生�
 
 ## Exact Next Step
 
-1. 审阅本轮差异并在可写 `.git` 的正常终端提交（提交信息可按团队规范调整）：
+1. 使用同一评审子代理基于当前工作树只读复审；复审覆盖已暂存、未暂存和未跟踪文件，不修改代码。无阻塞问题后，再由用户确认并提交：
 
 ```sh
 cd /home/picohood/projects/opensource/deepseek-harness
-git add SESSION_STATE.md \
-  docs/nilm-ai-agent-detailed-design-phase4.md \
-  docs/nilm-ai-agent-development-plan.md \
-  docs/nilm-ai-agent-high-level-design.md \
-  packages/nilm/context \
-  packages/nilm/core \
-  packages/nilm/service/README.md \
-  packages/nilm/service/README.zh.md \
-  packages/nilm/service/README.i18n.yaml \
-  packages/nilm/service/src/audit.ts \
-  packages/nilm/service/src/auth.ts \
-  packages/nilm/service/src/http.ts \
-  packages/nilm/service/src/index.ts \
-  packages/nilm/service/tests/auth.spec.ts \
-  packages/nilm/service/tests/security-pentest.spec.ts \
-  packages/nilm/tools
-git commit -m "feat(nilm): unify security audit across tools"
+git add SESSION_STATE.md docs/nilm-ai-agent-*.md packages/nilm \
+  scripts/translation-pairing.manifest.json pnpm-lock.yaml
+git commit -m "fix(nilm): close cross-tenant and idempotency review findings"
 ```
 
 2. 在真实 MySQL 执行一次离线写入验证：启动 source、触发 BFF 认证失败、跨租户拒绝与 Tool 参数拒绝，查询 `nilm_security_audit`，确认租户、事件、工具、会话与错误码正确且无请求体/提示词。

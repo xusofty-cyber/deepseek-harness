@@ -25,7 +25,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-nilm-core": "workspace:*",
     "@deepseek-ai/dsh-nilm-source": "workspace:*",
-    "@deepseek-ai/schemastery": "link:../../../vendor/schemastery"
+    "@deepseek-ai/schemastery": "workspace:~"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:~"

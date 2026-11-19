@@ -2,10 +2,10 @@
 
 ## 0. 模块导读与设计基线
 
-- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-requirements.md)
-- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-architecture.md)
-- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-high-level-design.md)
-- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-development-plan.md) §2 阶段 0
+- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](./nilm-ai-agent-requirements.md)
+- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](./nilm-ai-agent-architecture.md)
+- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](./nilm-ai-agent-high-level-design.md)
+- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](./nilm-ai-agent-development-plan.md) §2 阶段 0
 - **涵盖代码包**：
   - `packages/nilm/core/`（领域类型基座、品牌 ID、错误体系与质量规范）
   - `packages/nilm/context/`（调用方上下文绑定服务与内存生命周期）

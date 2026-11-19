@@ -2,10 +2,10 @@
 
 ## 0. 模块导读与设计基线
 
-- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-requirements.md) §FR-1, §FR-2, §FR-3
-- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-architecture.md) §4.3, §5.4, §6
-- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-high-level-design.md) §3, §4, §5, §6
-- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-development-plan.md) §3 阶段 1
+- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](./nilm-ai-agent-requirements.md) §FR-1, §FR-2, §FR-3
+- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](./nilm-ai-agent-architecture.md) §4.3, §5.4, §6
+- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](./nilm-ai-agent-high-level-design.md) §3, §4, §5, §6
+- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](./nilm-ai-agent-development-plan.md) §3 阶段 1
 - **涵盖代码包**：
   - `packages/nilm/assets/`（五级资产拓扑展开、计量点角色与互斥防重聚合）
   - `packages/nilm/timeseries/`（热库/统计库/冷代理三级路由、降采样与质量元数据）

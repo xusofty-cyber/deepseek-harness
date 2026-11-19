@@ -114,7 +114,10 @@ export class MemorySchedulerRepository implements SchedulerRepository {
 
   async enqueueReport(draft: ReportOutboxDraft): Promise<void> {
     const exists = this.outbox.some(row =>
-      row.tenantId === draft.tenantId && row.dedupeKey === draft.dedupeKey && row.channel === draft.channel)
+      row.tenantId === draft.tenantId
+      && row.dedupeKey === draft.dedupeKey
+      && row.userRef === draft.userRef
+      && row.channel === draft.channel)
     if (!exists) this.outbox.push(draft)
   }
 

@@ -144,6 +144,21 @@ describe('NilmAssetsService', () => {
     expect(result.warnings).toContain('appliance energy is an estimate and is excluded from settlement aggregation')
   })
 
+  it('rejects an appliance whose channel has no terminal ancestor', async () => {
+    const malformed = [
+      ...assets,
+      { nodeId: 'c9', parentId: 'w1', level: 'channel' as const, nodeName: '无终端通道', pathName: '工厂A/一号车间/无终端通道', isActive: true, channelType: 'sub' as const },
+      { nodeId: 'a9', parentId: 'c9', level: 'appliance' as const, nodeName: '孤立刻表', pathName: '工厂A/一号车间/无终端通道/孤立刻表', isActive: true },
+    ]
+    const ctx = new Context()
+    contexts.push(ctx)
+    const service = new NilmAssetsService(ctx, {
+      repository: { listAssets: async () => malformed, listBindings: async () => bindings },
+    })
+    await expect(service.resolveScope(callContext(), { level: 'appliance', name: '孤立刻表' }))
+      .rejects.toMatchObject({ code: 'DATA_UNAVAILABLE' })
+  })
+
   it('returns workshop channels and validates missing or ambiguous identifiers', async () => {
     const service = setup()
     expect(await service.getWorkshopChannels(callContext(), 'w1')).toHaveLength(2)

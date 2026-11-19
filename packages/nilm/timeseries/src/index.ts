@@ -453,8 +453,8 @@ export class NilmTimeseriesService extends Service {
     const buckets: EnergyBucket[] = []
     for (const meter of meterSet) {
       const channel = meter.channelId as string
-      const summarized = await this.energyRows(this.config.summarizedEnergyTable, channel, window, false, signal)
-      const single = await this.energyRows(this.config.energyTable, channel, window, true, signal)
+      const summarized = await this.energyRows(this.config.summarizedEnergyTable, channel, window, false, 'summarized', warnings, signal)
+      const single = await this.energyRows(this.config.energyTable, channel, window, true, 'raw', warnings, signal)
       const merged = mergeEnergyPoints(summarized, single)
       if (merged.length === 0) {
         warnings.push(`meter ${channel} has no energy samples`)
@@ -489,6 +489,8 @@ export class NilmTimeseriesService extends Service {
     channel: string,
     window: Window,
     singlePhase: boolean,
+    sourceLabel: string,
+    warnings: string[],
     signal?: AbortSignal,
   ): Promise<Array<{ tsMs: number; energy: number }>> {
     const filter = singlePhase ? " AND wiring_method = 'SGL'" : ''
@@ -496,6 +498,9 @@ export class NilmTimeseriesService extends Service {
       WHERE association_asset = '${safeId(channel)}' AND ts >= ${String(window.startMs)} AND ts < ${String(window.endMs)}${filter}
       ORDER BY ts LIMIT ${String(this.config.rawPointLimit + 1)}`
     const rows = await this.source.queryHot<Record<string, unknown>>(sql, signal)
+    if (rows.length > this.config.rawPointLimit) {
+      warnings.push(`meter ${channel} ${sourceLabel} energy rows were capped at ${String(this.config.rawPointLimit)}; totals cover only returned samples`)
+    }
     return rows.flatMap(row => {
       const value = row.energy_value
       return typeof value === 'number' && Number.isFinite(value)
@@ -518,6 +523,9 @@ export class NilmTimeseriesService extends Service {
         WHERE group_name = '${safeString(meter.pathName)}' AND ts >= ${String(window.startMs)} AND ts < ${String(window.endMs)}
         ORDER BY ts LIMIT ${String(this.config.rawPointLimit + 1)}`
       const rows = await this.source.queryStats<Record<string, unknown>>(sql, signal)
+      if (rows.length > this.config.rawPointLimit) {
+        warnings.push(`meter ${meter.pathName ?? (meter.channelId as string)} daily statistics rows were capped at ${String(this.config.rawPointLimit)}; totals cover only returned samples`)
+      }
       for (const row of rows) {
         const value = row.statistic_result
         if (typeof value !== 'number' || !Number.isFinite(value)) continue

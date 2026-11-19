@@ -10,6 +10,11 @@
     "docs/i18n/terminology.md",
     "docs/i18n/translation-prompt.md",
     "docs/nilm-ai-agent-architecture.md",
+    "docs/nilm-ai-agent-detailed-design-phase0.md",
+    "docs/nilm-ai-agent-detailed-design-phase1.md",
+    "docs/nilm-ai-agent-detailed-design-phase2.md",
+    "docs/nilm-ai-agent-detailed-design-phase3.md",
+    "docs/nilm-ai-agent-detailed-design-phase4.md",
     "docs/nilm-ai-agent-development-plan.md",
     "docs/nilm-ai-agent-high-level-design.md",
     "docs/nilm-ai-agent-requirements.md"

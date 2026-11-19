@@ -2,8 +2,8 @@
 
 ## 0. 文档导读与设计边界
 
-- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-requirements.md)
-- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-architecture.md)
+- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](./nilm-ai-agent-requirements.md)
+- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](./nilm-ai-agent-architecture.md)
 - **底层宿主环境**：`deepseek-harness`（Cordis 插件体系 + TypeScript Node.js ESM）
 - **文档定位**：本文档把架构方案映射为可落地的包结构、持久化表、领域服务接口、Tool 规格和调用方接入协议；架构取舍与论证以架构文档为准，本文档不重复展开。
 
@@ -367,8 +367,8 @@ CREATE TABLE `nilm_notification_outbox` (
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `sent_at` DATETIME DEFAULT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_tenant_notification_channel` (`tenant_id`, `notification_id`, `channel`),
-  UNIQUE KEY `uk_tenant_dedupe_channel` (`tenant_id`, `dedupe_key`, `channel`),
+  UNIQUE KEY `uk_tenant_notification_user_channel` (`tenant_id`, `notification_id`, `user_ref`, `channel`),
+  UNIQUE KEY `uk_tenant_dedupe_user_channel` (`tenant_id`, `dedupe_key`, `user_ref`, `channel`),
   KEY `idx_claim` (`status`, `next_retry_at`, `lease_expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通知 Outbox';
 ```
@@ -379,12 +379,12 @@ CREATE TABLE `nilm_notification_outbox` (
 | :--- | :--- | :--- |
 | `nilm_measurement_binding` | `tenant_id`、`terminal_id`、`channel_id`、`role`、`parent_channel_id`、`effective_from`、`effective_to` | `role` 为 `terminal_total/branch/appliance/reference`；唯一键 `(tenant_id, terminal_id, channel_id, effective_from)`；聚合前选择互不重叠的叶子计量点 |
 | `nilm_alert_transition` | `event_id`、`from_status`、`to_status`、`operator_type`、`operator_ref`、`reason`、`channel`、`created_at` | 每次状态变更写一条；用户确认不关闭检测 |
-| `nilm_notification_record` | `notification_id`、`tenant_id`、`channel`、`recipient_masked`、`event_id`、`status`、`provider_message_id`、`error_code`、`sent_at` | 唯一键 `(tenant_id, notification_id, channel)`；保留至少 180 天 |
+| `nilm_notification_record` | `notification_id`、`tenant_id`、`user_ref`、`channel`、`recipient_masked`、`event_id`、`status`、`provider_message_id`、`error_code`、`sent_at` | 唯一键 `(tenant_id, notification_id, user_ref, channel)`；保留至少 180 天 |
 | `nilm_security_audit` | `audit_id`、`tenant_id`、`user_ref`、`session_id`、`event_type`、`tool`、`query_template`、`scope`、`time_range`、`row_count`、`latency_ms`、`result_hash`、`error_code`、`created_at` | 保留至少 1 年；不含 SQL 明文与敏感结果 |
 | `nilm_job_run` | `job_run_id`、`job_type`、`tenant_id`、`scheduled_at`、`started_at`、`finished_at`、`status`、`idempotency_key`、`attempt`、`error_code` | 唯一键 `(job_type, idempotency_key)`；键必须包含 `tenant_id` 与业务日期 |
 | `nilm_report` | `report_id`、`tenant_id`、`report_type`、`report_date`、`payload_json`、`chart_json`、`summary_text`、`status`、`generated_at`、`delivered_at` | 唯一键 `(tenant_id, report_type, report_date)` |
 | `nilm_tariff_plan` | `plan_id`、`tenant_id`、`effective_from`、`effective_to`、`region`、`voltage_level`、`version` | 唯一键 `(tenant_id, plan_id)`；同一租户同一时间只有一个生效计划 |
-| `nilm_tariff_period` | `plan_id`、`season`、`day_type`、`period_type`、`start_time`、`end_time`、`price` | 唯一键 `(plan_id, season, day_type, period_type, start_time)`；`period_type` 为尖/峰/平/谷；支持一天多段 |
+| `nilm_tariff_period` | `tenant_id`、`plan_id`、`season`、`day_type`、`period_type`、`start_time`、`end_time`、`price` | 唯一键 `(tenant_id, plan_id, season, day_type, period_type, start_time)`；`period_type` 为尖/峰/平/谷；支持一天多段 |
 | `nilm_calendar_day` | `tenant_id`、`date`、`day_type`、`season`、`shift_json` | 唯一键 `(tenant_id, date)`；工作日、周末、节假日、电价季节与生产班次 |
 | `nilm_pf_policy` | `tenant_id`、`effective_from`、`threshold`、`reward_rule_json`、`penalty_rule_json` | 唯一键 `(tenant_id, effective_from)`；默认 0.90 只是初始值；没有可执行公式时只输出风险等级 |
 
@@ -974,7 +974,7 @@ canonical = METHOD + "\n" + PATH + "\n" + lowerhex(sha256(body)) + "\n" +
 }
 ```
 
-同一 `tenant_id + user_ref + clientMessageId` 重复提交返回同一个 `turnId`，不重复调用模型。`mode` 只决定模型路由偏好，不改变 Tool 权限。
+同一 `tenant_id + user_ref + clientMessageId` 在首轮完成后重复提交返回同一个 `turnId`，不重复调用模型；首轮仍在处理时返回 `429 RATE_LIMITED`，客户端应稍后重试，不得另起新轮。`mode` 只决定模型路由偏好，不改变 Tool 权限。
 
 首次请求可省略 `conversationId`，由 BFF 调用 `POST /v1/conversations` 的同一内部流程创建并返回；已有会话必须通过三元组归属校验，不能只凭 ID 读取。
 
@@ -1174,7 +1174,7 @@ Agent 只做“解释与建议”，不决定是否告警：Sentinel 事务提�
 | `QUERY_TIMEOUT` | 热聚合 >2s、热原始 >3s、冷库 >5s | `200` | 建议缩小范围或降低粒度 |
 | `TOOL_EXECUTION_TIMEOUT` | Tool 总预算超时（默认 8s） | `200` | 局部降级，不影响其他 Tool |
 | `MODEL_TIMEOUT` | 模型请求超时（默认 30s） | `200` | 降级为确定性文本报表 |
-| `RATE_LIMITED` | 每用户每分钟超过 10 次或租户并发超过 20 | `429` | 返回 `Retry-After`，不扣费 |
+| `RATE_LIMITED` | 同一 `clientMessageId` 尚在处理中，或每用户每分钟超过 10 次 / 租户并发超过 20 | `429` | 客户端稍后重试，不另起新轮；限流场景返回 `Retry-After`，不扣费 |
 | `CHART_TOO_LARGE` | 降采样后图表仍超过 64 KB | `200` | 返回文本结论与简化表 |
 | `INVALID_ARGUMENT` | 参数缺失、格式错误或请求体含 `tenant_id` | `400` | 说明字段错误，不进入 Agent |
 | `INTERNAL_ERROR` | 未分类内部异常 | `500` | 返回通用错误与 `requestId`，详情写审计 |

@@ -15,7 +15,7 @@ All deployment values come from the profile patch or `NILM_*` environment variab
 | `POST` | `/v1/conversations` | Creates a server-issued `conversationId` |
 | `GET` | `/v1/conversations` | Lists the caller's conversations, newest first |
 | `GET` | `/v1/conversations/{id}/messages` | Returns the caller-visible user and assistant history |
-| `POST` | `/v1/turns` | Accepts one message and returns `202` with `turnId`, `sessionId`, `conversationId`, and `streamUrl`; repeats of `clientMessageId` return the same turn |
+| `POST` | `/v1/turns` | Accepts one message and returns `202` with `turnId`, `sessionId`, `conversationId`, and `streamUrl`; a repeat after completion returns the same turn, while a concurrent duplicate still processing returns `429 RATE_LIMITED` |
 | `GET` | `/v1/turns/{id}/stream` | SSE stream with monotonic ids, `Last-Event-ID` replay, and keepalive `ping` |
 | `POST` | `/v1/turns/{id}/cancel` | Cancels the active generation and returns `204` |
 | `GET` | `/v1/alerts` | Lists caller-visible alerts when Sentinel is mounted; otherwise reports `available: false` |

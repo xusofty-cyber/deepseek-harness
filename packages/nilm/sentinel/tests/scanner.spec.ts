@@ -6,6 +6,7 @@ import NilmSentinelService, {
   type ApplianceSignal,
   type IncrementalUnsafeSource,
   type PowerSignal,
+  type RecipientRef,
   type RecipientPolicy,
   type RuleSignalProvider,
   type TenantPolicy,
@@ -36,9 +37,13 @@ class FakeUnsafeSource implements IncrementalUnsafeSource {
 class FakeRecipients implements RecipientPolicy {
   calls = 0
 
-  async resolve(): Promise<Array<{ userRef: string; channel: 'sms'; masked: string }>> {
+  constructor(private readonly targets: readonly RecipientRef[] = [
+    { userRef: 'user-1', channel: 'sms', masked: '138****0000' },
+  ]) {}
+
+  async resolve(): Promise<RecipientRef[]> {
     this.calls += 1
-    return [{ userRef: 'user-1', channel: 'sms', masked: '138****0000' }]
+    return [...this.targets]
   }
 }
 
@@ -108,7 +113,7 @@ function scope(): { tenantId: string; scope: { level: 'channel'; id: string; nam
   return { tenantId: 'tenant-a', scope: { level: 'channel' as const, id: 'channel-1', name: '一号车间/总进线' } }
 }
 
-function setup(options: { rules?: AlertRuleRow[]; now?: () => number } = {}): {
+function setup(options: { rules?: AlertRuleRow[]; now?: () => number; recipients?: readonly RecipientRef[] } = {}): {
   service: NilmSentinelService
   store: MemorySentinelStore
   unsafe: FakeUnsafeSource
@@ -120,7 +125,7 @@ function setup(options: { rules?: AlertRuleRow[]; now?: () => number } = {}): {
   const store = new MemorySentinelStore()
   const unsafe = new FakeUnsafeSource()
   const signals = new FakeSignals()
-  const recipients = new FakeRecipients()
+  const recipients = new FakeRecipients(options.recipients)
   store.tenants.set('tenant-a', tenant())
   store.rules.set('tenant-a', options.rules ?? [])
   store.scopes.set('channel-1', [scope()])
@@ -165,6 +170,22 @@ describe('incremental safety scan', () => {
     expect(fixture.recipients.calls).toBe(1)
     expect(fixture.events).toHaveLength(1)
     expect(fixture.events[0]).toMatchObject({ tenantId: 'tenant-a', ruleId: 'R-03', metric: 'unsafe_overload_power_kw' })
+  })
+
+  it('enqueues one alert row per recipient on the same channel', async () => {
+    const fixture = setup({
+      rules: [ruleRow()],
+      recipients: [
+        { userRef: 'user-1', channel: 'sms', masked: '138****0000' },
+        { userRef: 'user-2', channel: 'sms', masked: '139****0000' },
+      ],
+    })
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    fixture.unsafe.rows.push(row({ recordId: 'r1', recordTime: new Date(T0 + 1_000) }))
+    expect(await fixture.service.scanOnce()).toEqual({ read: 1, inserted: 1 })
+    expect(fixture.store.outbox).toHaveLength(2)
+    expect(new Set(fixture.store.outbox.map(item => item.userRef))).toEqual(new Set(['user-1', 'user-2']))
   })
 
   it('keeps every bucket row but collapses a duplicate de-duplication key', async () => {

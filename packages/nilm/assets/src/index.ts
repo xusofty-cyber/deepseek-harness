@@ -269,9 +269,13 @@ export class NilmAssetsService extends Service {
       if (parent?.level !== 'channel') {
         throw new NilmError('DATA_UNAVAILABLE', `appliance ${selected.nodeId} has no parent channel`)
       }
+      const terminalId = terminalFor(assets, parent)
+      if (terminalId === undefined) {
+        throw new NilmError('DATA_UNAVAILABLE', `appliance ${selected.nodeId} has no terminal ancestor`)
+      }
       return {
         meterSet: [{
-          terminalId: terminalFor(assets, parent) as TerminalId,
+          terminalId: terminalId as TerminalId,
           channelId: parent.nodeId as ChannelId,
           role: 'appliance',
         }],

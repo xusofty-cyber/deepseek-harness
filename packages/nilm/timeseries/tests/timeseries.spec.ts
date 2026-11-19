@@ -124,6 +124,24 @@ describe('NilmTimeseriesService', () => {
     expect(result.dataQuality.source).toBe('raw')
   })
 
+  it('warns when energy rows exceed the sample cap instead of reporting a complete total', async () => {
+    const source = fakeSource({
+      queryHot: async sql => sql.includes('summarized_energy')
+        ? [
+            { ts: base, energy_value: 10 },
+            { ts: base + 10 * 60_000, energy_value: 15 },
+            { ts: base + 20 * 60_000, energy_value: 18 },
+            { ts: base + 30 * 60_000, energy_value: 20 },
+          ]
+        : [],
+    })
+    const service = setup(source)
+    const result = await service.queryAggregatedEnergy(callContext(), [meter()], range(base, base + HOUR, 'hour'), 'hour')
+    const warning = 'meter c1 summarized energy rows were capped at 3; totals cover only returned samples'
+    expect(result.warnings).toContain(warning)
+    expect(result.dataQuality.warnings).toContain(warning)
+  })
+
   it('uses the statistics endpoint for day aggregates with a projected path', async () => {
     let statsCalls = 0
     const source = fakeSource({

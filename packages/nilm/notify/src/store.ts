@@ -276,17 +276,18 @@ async function upsertRecord(
 ): Promise<void> {
   await tx.query(
     `INSERT INTO nilm_notification_record
-      (notification_id, tenant_id, channel, recipient_masked, event_id, status,
+      (notification_id, tenant_id, user_ref, channel, recipient_masked, event_id, status,
        provider_message_id, error_code, sent_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE status = VALUES(status),
        recipient_masked = VALUES(recipient_masked),
        provider_message_id = VALUES(provider_message_id),
        error_code = VALUES(error_code),
        sent_at = VALUES(sent_at)`,
     [
-      task.notificationId, task.tenantId, task.channel, task.recipientMasked, task.eventId,
-      status, providerMessageId, errorCode, status === 'sent' ? new Date(nowMs) : null, new Date(nowMs),
+      task.notificationId, task.tenantId, task.userRef, task.channel, task.recipientMasked,
+      task.eventId, status, providerMessageId, errorCode,
+      status === 'sent' ? new Date(nowMs) : null, new Date(nowMs),
     ],
   )
 }

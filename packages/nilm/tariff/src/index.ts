@@ -140,10 +140,14 @@ const DAY_MS = 86_400_000
 
 /** Project-database repository backed by the guarded source adapter. */
 export class SourceTariffRepository implements TariffRepository {
+  private readonly source: () => Pick<NilmSourceService, 'queryLocalReadOnly'>
+
   /**
    * @param source - lazily resolved source service.
    */
-  constructor(private readonly source: () => NilmSourceService) {}
+  constructor(source: () => Pick<NilmSourceService, 'queryLocalReadOnly'>) {
+    this.source = source
+  }
 
   /**
    * @param tenantId - tenant boundary.
@@ -221,9 +225,9 @@ export class SourceTariffRepository implements TariffRepository {
       `SELECT plan_id AS planId, season, day_type AS dayType, period_type AS periodType,
               LEFT(start_time, 5) AS start, LEFT(end_time, 5) AS end, price
          FROM nilm_tariff_period
-        WHERE plan_id IN (${placeholders})
+        WHERE tenant_id = ? AND plan_id IN (${placeholders})
         ORDER BY plan_id, season, day_type, start_time`,
-      planIds,
+      [tenantId, ...planIds],
       signal,
     )
     const byPlan = new Map<string, TariffPeriod[]>()

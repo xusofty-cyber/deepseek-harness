@@ -2,10 +2,10 @@
 
 ## 0. 模块导读与设计基线
 
-- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-requirements.md) §FR-2.4, §FR-3.4, §FR-4
-- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-architecture.md) §1.2 (AD-12), §5.4, §6.8
-- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-high-level-design.md) §3.3, §4.3, §5.2
-- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](file:///home/picohood/projects/opensource/deepseek-harness/docs/nilm-ai-agent-development-plan.md) §4 阶段 2
+- **业务需求基线**：[docs/nilm-ai-agent-requirements.md](./nilm-ai-agent-requirements.md) §FR-2.4, §FR-3.4, §FR-4
+- **系统架构方案**：[docs/nilm-ai-agent-architecture.md](./nilm-ai-agent-architecture.md) §1.2 (AD-12), §5.4, §6.8
+- **概要设计规范**：[docs/nilm-ai-agent-high-level-design.md](./nilm-ai-agent-high-level-design.md) §3.3, §4.3, §5.2
+- **开发任务书**：[docs/nilm-ai-agent-development-plan.md](./nilm-ai-agent-development-plan.md) §4 阶段 2
 - **涵盖代码包**：
   - `packages/nilm/analytics/src/cusum.ts`（CUSUM 边沿检测纯函数算法与特征向量提取）
   - `packages/nilm/analytics/src/power-quality.ts`（能量加权功率因数测算与谐波含有率分析）
