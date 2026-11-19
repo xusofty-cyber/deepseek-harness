@@ -1,24 +1,22 @@
 # Session: 2026-11-19
 
 **Started:** 2026-11-19 (Asia/Shanghai)
-**Last Updated:** 2026-11-19 14:45 CST
+**Last Updated:** 2026-11-19 15:25 CST
 **Project:** `/home/picohood/projects/opensource/deepseek-harness`
-**Topic:** NILM WBS 4.4 补强：共享安全审计 seam、Tool 拒绝落库与调用方标识上界
+**Topic:** NILM 测试规约与用例全景说明书归档（46 套件 / 388 用例）
 
 ---
 
 ## What We Are Building
 
-在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。阶段 1/2/3 与 4.1/4.2/4.3/4.4 已落地；本轮基线提交为 `e83e7860c4`（BFF 审计写入 `nilm_security_audit`）。
+在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。
+阶段 0 至阶段 4 全量功能开发及审查修复（commit `bba0b64c16`）均已完成并推送至 GitHub 私有仓库 `git@github.com:xusofty-cyber/dsh-nilm.git`。
 
-本轮在基线上补齐 G4-4 的离线审计链路：
-
-- `nilm-core` 新增共享 `SecurityAuditEvent` / `SecurityAuditSink` seam，并声明可选 `Context.nilmAudit`；
-- `nilm-service` 提供 `nilmAudit` sink，BFF 与 Tool 拒绝写入同一有界异步队列；
-- `nilm-tools` 的安全拒绝从已绑定 `CallContext` 读取租户、用户、请求与会话，不伪造身份；
-- 验签链增加租户/用户 64 字符与请求 id 128 字符上限，避免超长值导致整批审计失败或日志膨胀。
-
-G4-4 现场门仍未通过：真实 MySQL 落库、真实双租户复验、生产日志留存、KMS/AES-GCM、审计一年保留与安全负责人签署均未执行。
+本轮完成了对全系统所有测试套件及测试用例的全面梳理与规约建档：
+- 新增 `docs/nilm-ai-agent-test-specifications.md`：详细记录 46 个测试套件文件、388 个自动化用例的测试目标、断言策略、边界覆盖及客观证据门（G0-1 ~ G4-4）映射全景。
+- 更新 `scripts/translation-pairing.manifest.json`：将新测试规约文档加入非双语翻译排除清单。
+- 生成对话 Artifact：`nilm-ai-agent-test-specifications`。
+- 六项文档门禁（pairing, limitations, model-experience, refs, budgets, md-links）全部 100% 校验通过。
 
 ---
 
@@ -128,18 +126,21 @@ G4-4 现场门仍未通过：真实 MySQL 落库、真实双租户复验、生�
 
 ## Exact Next Step
 
-1. 使用同一评审子代理基于当前工作树只读复审；复审覆盖已暂存、未暂存和未跟踪文件，不修改代码。无阻塞问题后，再由用户确认并提交：
+1. 提交本次测试用例全景规约文档及相关配置更新：
 
 ```sh
 cd /home/picohood/projects/opensource/deepseek-harness
-git add SESSION_STATE.md docs/nilm-ai-agent-*.md packages/nilm \
-  scripts/translation-pairing.manifest.json pnpm-lock.yaml
-git commit -m "fix(nilm): close cross-tenant and idempotency review findings"
+git add SESSION_STATE.md docs/nilm-ai-agent-test-specifications.md scripts/translation-pairing.manifest.json
+git commit -m "docs(nilm): catalog test specifications and verification matrix"
+git push dsh-nilm feat/nilm-ai-agent-architecture
+git push dsh-nilm feat/nilm-ai-agent-architecture:main
 ```
 
-2. 在真实 MySQL 执行一次离线写入验证：启动 source、触发 BFF 认证失败、跨租户拒绝与 Tool 参数拒绝，查询 `nilm_security_audit`，确认租户、事件、工具、会话与错误码正确且无请求体/提示词。
-
-3. 继续现场证据闭环：先做 G4-2 的 K8s SIGKILL/PVC 演练，再做 G4-3 的 100 x 5 x 30 分钟压测，最后完成 G4-4 安全评审签署。
+2. 阶段 4 现场实测验证闭环：
+   - G4-1: 真实调度器晨报全链路演练与产出留存；
+   - G4-2: K8s 集群实测 Pod SIGKILL、PVC 挂载漂移与撕裂恢复；
+   - G4-3: 100 家工厂真实压力测试与压测监控指标采集；
+   - G4-4: 双租户真实攻击对抗演练并留存落库审计表记录。
 
 ---
 
