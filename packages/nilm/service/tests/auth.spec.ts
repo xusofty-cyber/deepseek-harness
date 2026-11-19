@@ -20,6 +20,8 @@ function signed(
   body: Buffer,
   options: {
     tenantId?: string
+    userRef?: string
+    requestId?: string
     secret?: string
     timestamp?: string
     nonce?: string
@@ -28,17 +30,19 @@ function signed(
   } = {},
 ): { headers: IncomingHttpHeaders; body: Buffer } {
   const tenantId = options.tenantId ?? TENANT
+  const userRef = options.userRef ?? 'user-1'
+  const requestId = options.requestId ?? 'request-1'
   const secret = options.secret ?? SECRET
   const timestamp = options.timestamp ?? String(NOW)
   const nonce = options.nonce ?? `nonce-${String(++nonceCounter).padStart(8, '0')}`
   const allowedScope = options.allowedScope ?? ''
-  const canonical = canonicalRequest(method, path, body, tenantId, 'user-1', allowedScope, 'request-1', timestamp, nonce)
+  const canonical = canonicalRequest(method, path, body, tenantId, userRef, allowedScope, requestId, timestamp, nonce)
   return {
     body,
     headers: {
       'x-nilm-tenant-id': tenantId,
-      'x-nilm-user-ref': 'user-1',
-      'x-nilm-request-id': 'request-1',
+      'x-nilm-user-ref': userRef,
+      'x-nilm-request-id': requestId,
       'x-nilm-timestamp': timestamp,
       'x-nilm-nonce': nonce,
       'x-nilm-signature': options.signature ?? createSignature(secret, canonical),
@@ -113,5 +117,14 @@ describe('NILM BFF caller envelope', () => {
   it('rejects malformed allowed scope JSON', () => {
     const request = signed('POST', '/v1/turns', Buffer.from('{}'), { allowedScope: 'not-base64-json' })
     expect(() => verify(request)).toThrow('allowed scope')
+  })
+
+  it('rejects caller identifiers that exceed audit column widths', () => {
+    const longTenant = signed('POST', '/v1/turns', Buffer.from('{}'), { tenantId: 't'.repeat(65) })
+    expect(() => verify(longTenant)).toThrow('tenant header exceeds 64 characters')
+    const longUser = signed('POST', '/v1/turns', Buffer.from('{}'), { userRef: 'u'.repeat(65) })
+    expect(() => verify(longUser)).toThrow('user header exceeds 64 characters')
+    const longRequest = signed('POST', '/v1/turns', Buffer.from('{}'), { requestId: 'r'.repeat(129) })
+    expect(() => verify(longRequest)).toThrow('request id exceeds 128 characters')
   })
 })

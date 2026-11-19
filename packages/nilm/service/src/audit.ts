@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { AuditEvent } from './http.ts'
+import type { SecurityAuditEvent } from '@deepseek-ai/dsh-nilm-core'
 
 /** Tenant marker used when authentication rejected the request before identity was verified. */
 export const UNVERIFIED_AUDIT_TENANT = '__unverified__'
@@ -134,7 +134,7 @@ export class BufferedSecurityAuditSink {
    * Queue one event without blocking the caller.
    * @param event - BFF security event; must not contain request bodies or secrets.
    */
-  record(event: AuditEvent): void {
+  record(event: SecurityAuditEvent): void {
     if (this.closed) {
       this.options.onError(new Error('security audit sink is closed'), 1)
       return
@@ -184,7 +184,7 @@ export class BufferedSecurityAuditSink {
 }
 
 /** Map one BFF event to its audit row without copying request content. */
-function toRow(event: AuditEvent, auditId: string): SecurityAuditRow {
+function toRow(event: SecurityAuditEvent, auditId: string): SecurityAuditRow {
   return {
     auditId,
     tenantId: event.tenantId ?? UNVERIFIED_AUDIT_TENANT,

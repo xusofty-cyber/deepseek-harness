@@ -26,6 +26,8 @@
 
 阶段 1 接受 HMAC-SHA256 信封：`X-Nilm-Tenant-Id`、`X-Nilm-User-Ref`、`X-Nilm-Request-Id`、`X-Nilm-Timestamp`、`X-Nilm-Nonce`、可选的 `X-Nilm-Allowed-Scope` 与 `X-Nilm-Signature`。规范串覆盖方法、路径、请求体摘要与全部上下文头。端点不接受查询参数，带查询参数的请求会被拒绝，避免只签名部分输入。JSON 请求体中的 `tenant_id` 被忽略并审计；Tool 永远拿不到它。
 
+租户与用户头限制为 64 个字符，与会话和审计表字段宽度一致；请求 id 限制为 128 个字符，以约束审计事件与结构化日志体积。超长值会在导致审计整批失败之前被拒绝。
+
 ## SSE 重放
 
 `POST /v1/turns` 不直接返回事件流。调用方连接 `streamUrl`，因此断线重连、取消、幂等与审计都锚定稳定的 `turnId`。每轮事件缓冲保存在进程内存；`Last-Event-ID` 重放比客户端检查点更新的事件，`ping` 帧维持空闲连接。
@@ -91,6 +93,8 @@ Tool 轮次只按观测到的 `tool.start` 分类；提示要求分析但未产�
 
 认证失败写 `auth.rejected`；其余拒绝写 `request.rejected`，仅在身份校验已通过时携带已认证租户。携带 `INVALID_ARGS`、`SCOPE_FORBIDDEN` 或租户上下文不可用的 Tool 失败写 `tool.rejected`；SQL 守卫在驱动接触语句前写 `sql.rejected`。审计记录不包含请求体、模型提示词、手机号、OpenID、签名或 Token。插件日志消息经过 `redactText`，结构化审计值经过 `redactValue`，将中国大陆手机号掩码为 `138****0000`，并掩码带标签或裸 OpenID、Bearer 凭证、API Key 与 `v1=` 签名。套件断言每个声明用例都已执行，删除或改名用例会使测试失败。
 
+Tool 边界拒绝携带已绑定的 `CallContext` 租户、用户、请求与会话，并使用与 BFF 相同的共享 `nilmAudit` sink。SQL 守卫自身的 `sql.rejected` 事件仍只写结构化日志，因为 source 适配器没有已验证的调用方身份；当 SQL 拒绝穿过 Tool 边界时，会以该 Tool 的 `tool.rejected` 行落库。
+
 在 NILM app profile 中，每个 BFF 审计事件还会进入 `nilm_security_audit` 写入队列。`NILM_AUDIT_QUEUE_SIZE`（默认 `1024`）限制队列长度，`NILM_AUDIT_BATCH_SIZE`（默认 `64`）设置单事务行数。队列满时丢弃最新事件；事务失败时记录批量大小后丢弃该批。事件不重试，因此脱敏后的结构化日志仍是兜底证据。认证失败使用 `tenant_id = __unverified__`，因为彼时没有已验证租户；未认证的 Header 值不会写入；`__unverified__` 为保留值，`signingSecrets` 中会被拒绝。
 
 离线证据止于拦截、审计事件产生与进程内持久化假实现。它不证明生产日志留存、KMS 数据库加密、审计保留一年的承诺或模型供应商侧处理。Session 按设计保留模型可见的用户问题，因此不能用“原始问题不存在”满足 G4-4；生产评审必须展示 Session 访问控制与加密、受审计的日志汇，以及持久化的 `nilm_security_audit` 存储。G4-4 仍需完成该评审并确认无 Critical/High 遗留。
@@ -103,7 +107,7 @@ Tool 轮次只按观测到的 `tool.start` 分类；提示要求分析但未产�
 - 分片数变更与租户迁移属于部署操作。BFF 会拒绝非归属分片上的租户，但从不迁移 Session 文件，也不承诺跨分片漂移恢复。
 - 离线测试覆盖租户目录布局、会话重载、撕裂尾部读取与 Session 写入互斥。真实 StatefulSet SIGKILL 与 PVC 重挂仍需集群演练。
 - 每轮缓冲与幂等记录在进程生命周期内保留；阶段 1 尚未实现淘汰或归档策略。
-- 审计记录经进程内脱敏后写入插件日志，并通过有界尽力队列写入 `nilm_security_audit`。队列溢出与数据库失败会在记录数量后丢弃事件；尚无重试、Outbox 或保留策略。生产日志汇留存与 KMS 加密证据仍待补齐。
+- 审计记录经进程内脱敏后写入插件日志，并通过有界尽力队列写入 `nilm_security_audit`。BFF 与已绑定租户的 Tool 拒绝共享该 sink；SQL 守卫事件仍只写日志。队列溢出与数据库失败会在记录数量后丢弃事件；尚无重试、Outbox 或保留策略。生产日志汇留存与 KMS 加密证据仍待补齐。
 - 告警列表与确认委托给 `nilmSentinel`；该插件未挂载时按设计保持不可用。在签名请求契约接受查询参数前，不提供分页。
 - G4-3 harness 仅有离线测试。尚未产出 100 租户 x 5 会话、30 分钟的目标报告；自检验证的是 harness，不是服务容量。
 - G4-4 攻击语料仅在离线运行。生产日志审查、KMS/AES-GCM 验证、审计存储留存与无 Critical/High 的安全结论仍待完成。

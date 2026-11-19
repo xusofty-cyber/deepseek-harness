@@ -104,6 +104,7 @@ export function apply(ctx: Context, config: NilmServiceConfig): void {
       ctx.logger.error(`nilm.security audit queue is full; dropped ${String(dropped)} event(s)`)
     },
   })
+  ctx.provide('nilmAudit', auditSink)
   const sentinel = ctx.get('nilmSentinel')
   const service = new NilmHttpService({
     config: resolved,

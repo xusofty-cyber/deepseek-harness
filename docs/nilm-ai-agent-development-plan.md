@@ -155,7 +155,7 @@ flowchart LR
 
 已完成：五级拓扑与互不重叠计量点选择、热/统计/冷路由与降采样、分时电价与电费、设备运行/停止时长与估算电量、安全隐患投影、4 个 `nilm_*` Tool、稳定基座提示词、BFF REST/SSE、HMAC 验签、时间戳/nonce 校验、`allowed_scope`、会话三元组归属、`clientMessageId` 幂等、`Last-Event-ID` 重放、取消与健康检查。
 
-以下为明确的部署前置，不伪装成已交付：mTLS 仅完成协议设计，代码只接受 HMAC；nonce、幂等映射与本轮缓冲是进程内状态，多副本前需 Redis 与共享幂等记录；会话元数据在配置 `NILM_SESSIONS_ROOT` 后落 PVC，MySQL `nilm_conversation` 尚未接入；BFF 安全审计经有界异步队列写入 `nilm_security_audit`，队列溢出或事务失败会记录后丢弃，Tool/SQL 守卫拒绝仍只写结构化日志；告警端点为空骨架；黄金问答 Session 快照需在具备真实数据源与模型录制的环境生成。阶段 1 `nilm_appliance_query` 只返回上游稳定的运行/停止状态与估算电量，不推断空载或浪费金额。
+以下为明确的部署前置，不伪装成已交付：mTLS 仅完成协议设计，代码只接受 HMAC；nonce、幂等映射与本轮缓冲是进程内状态，多副本前需 Redis 与共享幂等记录；会话元数据在配置 `NILM_SESSIONS_ROOT` 后落 PVC，MySQL `nilm_conversation` 尚未接入；BFF 与已绑定 `CallContext` 的 Tool 拒绝经有界异步队列写入 `nilm_security_audit`，队列溢出或事务失败会记录后丢弃，SQL 守卫原始 `sql.rejected` 仍只写结构化日志；告警端点为空骨架；黄金问答 Session 快照需在具备真实数据源与模型录制的环境生成。阶段 1 `nilm_appliance_query` 只返回上游稳定的运行/停止状态与估算电量，不推断空载或浪费金额。
 
 ---
 
@@ -326,7 +326,7 @@ flowchart LR
 | G4-1 晨报演练脚本 | 离线部分通过 | `pnpm test:scheduler:morning-report` 验证 20 租户重算、幂等与延迟预算 | 08:35 前送达完成率 > 99% 需在线渠道回执 |
 | G4-2 租户分片路由、PVC 会话索引、同分片恢复 | 离线部分完成 | `packages/nilm/sharding` 固定向量与分布用例；`packages/nilm/service/tests` 覆盖租户目录、分片拒绝、跨实例会话重载；`packages/nilm/service/tests/recovery.spec.ts` 用真实 JSONL 后端验证撕裂尾部读取，并在原生租约可用时验证写互斥与继任续写 | 需真实 K8s 环境执行 SIGKILL、PVC 重挂与边缘路由演练；`deploy/k8s/` 清单已交付，但 `nilm-edge` 由平台边缘网关实现 |
 | G4-3 百家工厂压测 harness | 已交付，现场未执行 | `packages/nilm/service/tests/perf-load.spec.ts` 覆盖最近秩百分位、门禁判定、manifest 预检、签名信封、SSE 分块解析、注入 transport 调度与隔离探测；loopback 自检在可绑定回环端口的主机运行 | 需真实目标环境、100 租户签名密钥与 90 天分钟级 / 7 天秒级数据集；必须先完成 G4-2 演练；保存 100 x 5 x 30 分钟报告、manifest、租户清单与命令 |
-| G4-4 版本化攻击套件、审计链路与日志脱敏 | 已交付，现场未执行 | `packages/nilm/service/tests/security-pentest.spec.ts` 的 32 个用例覆盖 BFF 信封、双租户越权、SQL 守卫、Tool 参数与不可变 `CallContext`，并断言 `auth.rejected`/`request.rejected`/`tool.rejected`/`sql.rejected`；`packages/nilm/service/tests/audit.spec.ts` 覆盖参数化批量写入、队列上界、写入失败与关闭排空；`packages/nilm/core/tests/redact.spec.ts` 覆盖手机号、OpenID、Bearer/API Key 与 `v1=` 签名脱敏；离线套件 34 个用例通过（本机 `pnpm` 不可用时以 vitest 直跑） | 需真实双租户环境复验；生产日志汇留存、KMS/AES-GCM 存储验证与 `nilm_security_audit` 一年留存证据；安全负责人签署无 Critical/High 结论 |
+| G4-4 版本化攻击套件、审计链路与日志脱敏 | 已交付，现场未执行 | `packages/nilm/service/tests/security-pentest.spec.ts` 的 32 个用例覆盖 BFF 信封、双租户越权、SQL 守卫、Tool 参数与不可变 `CallContext`，并断言 `auth.rejected`/`request.rejected`/`tool.rejected`/`sql.rejected`；Tool 拒绝携带绑定租户与会话并共享 `nilmAudit` sink；`packages/nilm/service/tests/audit.spec.ts` 覆盖参数化批量写入、队列上界、写入失败与关闭排空；`packages/nilm/service/tests/auth.spec.ts` 覆盖租户/用户 64 字符与请求 id 128 字符上限；`packages/nilm/core/tests/redact.spec.ts` 覆盖手机号、OpenID、Bearer/API Key 与 `v1=` 签名脱敏；离线套件 34 个用例通过（本机 `pnpm` 不可用时以 vitest 直跑） | 需真实双租户环境复验；生产日志汇留存、KMS/AES-GCM 存储验证与 `nilm_security_audit` 一年留存证据；安全负责人签署无 Critical/High 结论 |
 
 ---
 

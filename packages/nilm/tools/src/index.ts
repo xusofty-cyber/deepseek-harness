@@ -19,6 +19,7 @@ import {
   type CallContext,
   type ChartSpec,
   type EnergyBucket,
+  type SecurityAuditEvent,
   type ScopeLevel,
   type ScopeTarget,
   type TimeRangeSpec,
@@ -36,7 +37,7 @@ import type {
 import { downsampleBuckets, type AnalysisSample } from '@deepseek-ai/dsh-nilm-timeseries'
 
 /** One tool failure that crossed a security boundary; arguments never appear here. */
-export interface ToolSecurityAuditEvent {
+export interface ToolSecurityAuditEvent extends SecurityAuditEvent {
   /** Stable event class. */
   readonly type: 'tool.rejected'
   /** Registered tool name; never model-generated text. */
@@ -95,7 +96,7 @@ export interface NilmToolHost {
   /** Tool registry that receives the definitions. */
   tools: Pick<Context['tools'], 'register'>
   /** Process-memory caller context bound by the BFF. */
-  nilmContext: Pick<Context['nilmContext'], 'require'>
+  nilmContext: Pick<Context['nilmContext'], 'require' | 'current'>
   /** Authorized topology resolver. */
   nilmAssets: Pick<Context['nilmAssets'], 'resolveScope'>
   /** Authorized timeseries router. */
@@ -175,7 +176,10 @@ export function apply(ctx: Context): void {
     nilmTariff: ctx.nilmTariff,
     nilmAnalytics: ctx.nilmAnalytics,
     nilmSafety: ctx.nilmSafety,
-    securityAudit: event => { ctx.logger.warn(`nilm.security ${JSON.stringify(redactValue(event))}`) },
+    securityAudit: event => {
+      ctx.logger.warn(`nilm.security ${JSON.stringify(redactValue(event))}`)
+      ctx.get('nilmAudit')?.record(event)
+    },
   })
 }
 
@@ -186,7 +190,7 @@ export function apply(ctx: Context): void {
  */
 export function applyTools(ctx: NilmToolHost): void {
   const register = (definition: ToolDefinition): void => {
-    ctx.tools.register(audited(closed(definition), ctx.securityAudit))
+    ctx.tools.register(audited(closed(definition), ctx))
   }
 
   register(defineTool({
@@ -965,7 +969,8 @@ function stableErrorCode(error: unknown): string | undefined {
 }
 
 /** Report authorization and argument-boundary failures without echoing caller input. */
-function audited<T extends ToolDefinition>(tool: T, audit: NilmToolHost['securityAudit']): T {
+function audited<T extends ToolDefinition>(tool: T, host: NilmToolHost): T {
+  const audit = host.securityAudit
   if (audit === undefined) return tool
   return {
     ...tool,
@@ -975,7 +980,18 @@ function audited<T extends ToolDefinition>(tool: T, audit: NilmToolHost['securit
       } catch (error) {
         const code = stableErrorCode(error)
         if (code !== undefined && SECURITY_TOOL_FAILURE_CODES.has(code)) {
-          audit({ type: 'tool.rejected', tool: tool.name, code })
+          const caller = exec.agent?.id === undefined ? undefined : host.nilmContext.current(exec.agent.id)
+          audit({
+            type: 'tool.rejected',
+            tool: tool.name,
+            code,
+            ...(caller === undefined ? {} : {
+              tenantId: caller.tenantId,
+              userRef: caller.userRef,
+              requestId: caller.requestId,
+              sessionId: caller.sessionId,
+            }),
+          })
         }
         throw error
       }

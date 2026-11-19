@@ -275,8 +275,9 @@ flowchart TD
 
 - **版本化语料**：`packages/nilm/service/tests/security-pentest.spec.ts` 声明 `4.4.1` 版本与 32 个用例清单，末项用例断言清单内每个 id 都被真实执行；命令为 `pnpm test:security:pentest`。
 - **四层拦截**：BFF 信封与双租户隔离用例验证 `401/403/404` 与租户归属；SQL 守卫用例在假驱动调用数为 0 的前提下拒绝写语句、多语句、注释、字面量、锁读与非白名单表；Tool 用例验证注入的 `tenant_id`/`target_tenant_id`/`allowed_scope` 被闭集 Schema 以 `INVALID_ARGS` 拒绝并写 `tool.rejected`，且业务服务调用数为 0；上下文用例验证冻结与重绑定语义。
-- **审计写入**：认证失败写 `auth.rejected`（不记录未认证 Header）；其余拒绝写 `request.rejected`，仅在身份校验已通过时携带租户；Tool 安全失败写 `tool.rejected`；SQL 守卫拒绝写 `sql.rejected`。审计载荷不含请求体、提示词、手机号、OpenID、Token 或签名。
-- **审计持久化**：BFF 事件经有界异步队列批量写入 `nilm_security_audit`（`NILM_AUDIT_QUEUE_SIZE` 默认 1024，`NILM_AUDIT_BATCH_SIZE` 默认 64）。认证失败使用 `tenant_id = __unverified__`；队列满丢弃最新事件，事务失败记录批量后丢弃，不重试。`packages/nilm/service/tests/audit.spec.ts` 覆盖参数绑定、队列上界、失败续写与关闭排空。
+- **审计写入**：认证失败写 `auth.rejected`（不记录未认证 Header）；其余拒绝写 `request.rejected`，仅在身份校验已通过时携带租户；Tool 安全失败写 `tool.rejected`，并携带已绑定 `CallContext` 的租户、用户、请求与会话；SQL 守卫拒绝写 `sql.rejected`。审计载荷不含请求体、提示词、手机号、OpenID、Token 或签名。
+- **调用方标识边界**：验签前将租户与用户头限制为 64 个字符、请求 id 限制为 128 个字符，与 `nilm_conversation`/`nilm_security_audit` 字段宽度对齐。超长租户或用户返回 `401`，超长请求 id 返回 `400`，避免单个超长值导致整批审计写入失败或日志膨胀。
+- **审计持久化**：BFF 与 Tool 拒绝共享 `nilmAudit` sink，经有界异步队列批量写入 `nilm_security_audit`（`NILM_AUDIT_QUEUE_SIZE` 默认 1024，`NILM_AUDIT_BATCH_SIZE` 默认 64）。认证失败使用 `tenant_id = __unverified__`；SQL 守卫原始事件因无已验证调用方身份仍只写日志；队列满丢弃最新事件，事务失败记录批量后丢弃，不重试。`packages/nilm/service/tests/audit.spec.ts` 覆盖参数绑定、队列上界、失败续写与关闭排空；安全套件断言 Tool 拒绝携带绑定租户与会话。
 - **证据边界**：离线套件证明拦截、审计事件产生与写入逻辑，不证明生产日志汇留存、KMS 密钥注入、数据库密文落盘或审计行保留一年；Session 按“模型可见⟺已记录”保留原始提问，G4-4 需以访问控制、加密与审计留存评审而非“原始提问不存在”结案。
 
 ---

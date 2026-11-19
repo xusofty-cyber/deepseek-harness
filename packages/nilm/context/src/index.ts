@@ -66,6 +66,16 @@ export class NilmContextService extends Service {
   }
 
   /**
+   * Read the current caller context without treating an absent binding as a
+   * tool failure. Security auditing must not mask the original rejection.
+   * @param agentId - runtime Agent identifier.
+   * @returns the bound immutable caller context, or `undefined` when none exists.
+   */
+  current(agentId: string): CallContext | undefined {
+    return this.contexts.get(agentId)
+  }
+
+  /**
    * Remove the binding for one Agent. Revoking an absent binding is a no-op.
    * @param agentId - runtime Agent identifier.
    */

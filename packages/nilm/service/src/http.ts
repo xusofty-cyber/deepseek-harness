@@ -14,7 +14,13 @@ import {
 } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { NilmError, SECURITY_TOOL_FAILURE_CODES, type SessionId, type TenantId } from '@deepseek-ai/dsh-nilm-core'
+import {
+  NilmError,
+  SECURITY_TOOL_FAILURE_CODES,
+  type SecurityAuditEvent,
+  type SessionId,
+  type TenantId,
+} from '@deepseek-ai/dsh-nilm-core'
 import { shardForTenant, type ShardAssignment } from '@deepseek-ai/dsh-nilm-sharding'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { AuthError, NonceStore, verifyRequest, type VerifiedCaller } from './auth.ts'
@@ -24,17 +30,7 @@ import { TurnEventBuffer } from './events.ts'
 import type { ChatMessage, NilmAgentEvent, NilmAgentRuntime, NilmAgentSession, TurnMode } from './runtime.ts'
 
 /** One security-relevant BFF event; implementations must not include request bodies or secrets. */
-export interface AuditEvent {
-  readonly type: string
-  readonly requestId?: string
-  readonly tenantId?: string
-  readonly userRef?: string
-  /** Session that produced the event when one exists. */
-  readonly sessionId?: string
-  /** Registered tool name for tool events; never model-generated text. */
-  readonly tool?: string
-  readonly code?: string
-}
+export type AuditEvent = SecurityAuditEvent
 
 /** Request fields the BFF reads; `IncomingMessage` satisfies this interface. */
 export interface NilmHttpRequest {

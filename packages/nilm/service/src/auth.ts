@@ -86,6 +86,15 @@ const REQUIRED_HEADERS = [
   'x-nilm-signature',
 ] as const
 
+/** `nilm_conversation.tenant_id` and `nilm_security_audit.tenant_id` column width. */
+const MAX_TENANT_ID_CHARACTERS = 64
+
+/** `nilm_conversation.user_ref` and `nilm_security_audit.user_ref` column width. */
+const MAX_USER_REF_CHARACTERS = 64
+
+/** Upper bound that keeps audit values and structured log lines bounded. */
+const MAX_REQUEST_ID_CHARACTERS = 128
+
 const SCOPE_LEVELS = new Set<ScopeLevel>(['factory', 'workshop', 'terminal', 'channel', 'appliance'])
 const SCOPE_KEYS = new Set(['level', 'id', 'name', 'path'])
 
@@ -153,6 +162,16 @@ export function verifyRequest(input: VerifyRequestInput): VerifiedCaller {
   const nonce = values.get('x-nilm-nonce') as string
   const signature = values.get('x-nilm-signature') as string
   const allowedScopeB64 = header(headers, 'x-nilm-allowed-scope') ?? ''
+
+  if (Array.from(tenantId).length > MAX_TENANT_ID_CHARACTERS) {
+    throw new AuthError('UNAUTHORIZED_TENANT', `tenant header exceeds ${String(MAX_TENANT_ID_CHARACTERS)} characters`, 401)
+  }
+  if (Array.from(userRef).length > MAX_USER_REF_CHARACTERS) {
+    throw new AuthError('UNAUTHORIZED_TENANT', `user header exceeds ${String(MAX_USER_REF_CHARACTERS)} characters`, 401)
+  }
+  if (Array.from(requestId).length > MAX_REQUEST_ID_CHARACTERS) {
+    throw new AuthError('INVALID_ARGUMENT', `request id exceeds ${String(MAX_REQUEST_ID_CHARACTERS)} characters`, 400)
+  }
 
   const timestamp = Number(timestampText)
   if (!Number.isSafeInteger(timestamp) || Math.abs(input.nowMs - timestamp) > input.clockSkewMs) {

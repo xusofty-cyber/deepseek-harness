@@ -32,12 +32,14 @@ describe('NilmContextService', () => {
     service.bind('agent-1', callContext())
     const bound = service.require('agent-1')
     expect(bound.tenantId).toBe('tenant-a')
+    expect(service.current('agent-1')).toBe(bound)
     expect(Object.isFrozen(bound)).toBe(true)
     expect(Object.isFrozen(bound.allowedScope)).toBe(true)
   })
 
   it('rejects lookups before binding and after revoke', () => {
     const service = setup()
+    expect(service.current('agent-1')).toBeUndefined()
     expect(() => service.require('agent-1')).toThrow(NilmToolError)
     service.bind('agent-1', callContext())
     service.revoke('agent-1')

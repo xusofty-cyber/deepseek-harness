@@ -199,6 +199,9 @@ function host(options: {
         if (agentId !== 'session-1') throw new Error('unexpected agent')
         return context
       },
+      current(agentId) {
+        return agentId === 'session-1' ? context : undefined
+      },
     },
     nilmAssets: { resolveScope: async () => options.resolution ?? resolution() },
     nilmTimeseries: {
