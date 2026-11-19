@@ -1,9 +1,9 @@
 # Session: 2026-11-19
 
 **Started:** 2026-11-19 (Asia/Shanghai)
-**Last Updated:** 2026-11-19 15:25 CST
+**Last Updated:** 2026-11-19 16:10 CST
 **Project:** `/home/picohood/projects/opensource/deepseek-harness`
-**Topic:** NILM 测试规约与用例全景说明书归档（46 套件 / 388 用例）
+**Topic:** NILM 测试规约重写与验证矩阵校准（46 套件 / 381 断言）
 
 ---
 
@@ -12,11 +12,11 @@
 在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。
 阶段 0 至阶段 4 全量功能开发及审查修复（commit `bba0b64c16`）均已完成并推送至 GitHub 私有仓库 `git@github.com:xusofty-cyber/dsh-nilm.git`。
 
-本轮完成了对全系统所有测试套件及测试用例的全面梳理与规约建档：
-- 新增 `docs/nilm-ai-agent-test-specifications.md`：详细记录 46 个测试套件文件、388 个自动化用例的测试目标、断言策略、边界覆盖及客观证据门（G0-1 ~ G4-4）映射全景。
-- 更新 `scripts/translation-pairing.manifest.json`：将新测试规约文档加入非双语翻译排除清单。
+本轮完成了对全系统测试规约的校准式重写：
+- 重写 `docs/nilm-ai-agent-test-specifications.md`：按实际 Vitest 输出记录 46 个测试文件、381 个断言；用例标题直接来自当前 `it()`，安全套件按 32 个 `PENTEST_CASES` 声明 ID 展示；证据门改为 21 项并区分离线与现场。
+- 保留 `scripts/translation-pairing.manifest.json` 中的非双语排除项；该文档仍无英文配对，属于预期。
 - 生成对话 Artifact：`nilm-ai-agent-test-specifications`。
-- 六项文档门禁（pairing, limitations, model-experience, refs, budgets, md-links）全部 100% 校验通过。
+- 文档门禁（doc refs, doc budgets, md-links）全部退出 0；translation pairing 仍按 manifest 排除。
 
 ---
 
@@ -46,6 +46,12 @@
 - **依赖策略门禁** — 未能启动：当前安装缺 `@jridgewell/gen-mapping`（脚本在导入阶段退出），不是检测到的违规。
 - **`oxlint`** — 未执行：当前安装缺 `node_modules/oxlint`；缩进规则已按配置静态核对，不能声称 lint 已运行。
 
+### 测试规约重写验证（2026-11-19 15:27 CST）
+
+- **Vitest 实测** — 日常套件 45 个文件、379 个断言全部通过；`recovery.spec.ts` 2 个断言中 1 个通过、1 个因缺少原生 flock 跳过；合计 46 个文件、381 个断言。
+- **文档逐文件校验** — 46 个文件块全部存在；349 条普通用例标题与 32 条 pentest 声明表行相加为 381；与 Vitest JSON 逐文件比对零错误。
+- **文档门禁** — `verify-md-links` 2649 文件、`verify-doc-refs` 5271 文件、`verify-doc-budgets` 7 个在预算内；`git diff --check` 通过。
+
 ---
 
 ## What WORKED (with evidence)
@@ -55,9 +61,9 @@
 - **SQL 守卫边界** — source 适配器的原始 `sql.rejected` 仍只写结构化日志，因为没有已验证调用方身份；穿过 Tool 边界的 SQL 拒绝由 `tool.rejected` 携带租户落库。
 - **调用方标识上界** — `packages/nilm/service/src/auth.ts` 在 HMAC 校验前拒绝超过 64 字符的租户/用户头（`401`）与超过 128 字符的请求 id（`400`），与 `nilm_conversation` / `nilm_security_audit` 字段宽度对齐。confirmed by: `auth.spec.ts` 9 个用例通过，含超长标识拒绝。
 - **BFF 审计持久化（基线已提交）** — `SqlSecurityAuditStore` 参数化批量写入；`BufferedSecurityAuditSink` 保持顺序、队列满丢最新、事务失败丢弃该批后继续；关闭时排空。未认证事件使用 `__unverified__`，配置拒绝同名真实租户。
-- **全量 NILM** — confirmed by: 45 个测试文件、370 通过、1 跳过（`perf-load` loopback 因沙箱 `EPERM` 跳过，2026-11-19 11:22 CST）。
+- **全量 NILM** — confirmed by: 45 个测试文件、379 通过（2026-11-19 15:27 CST）；`recovery.spec.ts` 另计 1 通过、1 跳过。
 - **类型检查** — confirmed by: 临时 `noEmit` 配置覆盖全部 `packages/nilm/*/src`，NILM 路径零错误；整体退出码 2 来自仓库其他包缺失 `zod` 等既有依赖。覆盖测试时仅剩既有 `recovery.spec.ts` 的工作区路径解析错误。
-- **文档门禁** — confirmed by: translation pairing 1 对一致；limitations 398 个通过；model experience 398 个通过；doc refs 5271 个可解析；doc budgets 7 个在预算内；md links 2648 个通过。
+- **文档门禁** — confirmed by: translation pairing 按 manifest 排除；limitations 398 个通过；model experience 398 个通过；doc refs 5271 个可解析；doc budgets 7 个在预算内；md links 2649 个通过。
 - **`git diff --check`** — confirmed by: 空白与行尾检查通过。
 
 ---
@@ -126,14 +132,12 @@
 
 ## Exact Next Step
 
-1. 提交本次测试用例全景规约文档及相关配置更新：
+1. 提交测试规约重写（推送需另行授权）：
 
 ```sh
 cd /home/picohood/projects/opensource/deepseek-harness
-git add SESSION_STATE.md docs/nilm-ai-agent-test-specifications.md scripts/translation-pairing.manifest.json
-git commit -m "docs(nilm): catalog test specifications and verification matrix"
-git push dsh-nilm feat/nilm-ai-agent-architecture
-git push dsh-nilm feat/nilm-ai-agent-architecture:main
+git add SESSION_STATE.md docs/nilm-ai-agent-test-specifications.md
+git commit -m "docs(nilm): rewrite test specifications from executable tests"
 ```
 
 2. 阶段 4 现场实测验证闭环：
