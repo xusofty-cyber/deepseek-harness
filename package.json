@@ -64,6 +64,7 @@
     "test:coverage:partitioned": "tsx scripts/run-coverage-partitions.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:perf:timeseries": "vitest run packages/nilm/analytics/tests/cusum.spec.ts -t 'processes four hours'",
+    "test:perf:load": "tsx packages/nilm/service/scripts/perf-load.ts",
     "test:scheduler:morning-report": "vitest run packages/nilm/scheduler/tests/morning-report.spec.ts -t 'twenty tenants'",
     "test:bench": "npm run build:bench && npm run build:web && npm run test:bench:built",
     "test:bench:built": "tsx scripts/run-bench-suite.ts",

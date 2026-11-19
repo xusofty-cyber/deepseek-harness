@@ -10,7 +10,7 @@
   - `packages/nilm/scheduler/`（Cron 调度器、租约选主、08:30 晨报流水线、力调预测、R-08 数据质量巡检）
   - `deploy/k8s/`（StatefulSet, Headless Service, PVC, Ingress, NetworkPolicy）
   - `packages/nilm/notify/`（Report 卡片渠道分发与回执回填）
-  - `benchmarks/` 与压测套件（百家工厂并发性能与吞吐量验证）
+  - `packages/nilm/service/scripts/perf-load.ts` 与 `scripts/perf/`（百家工厂并发性能与吞吐量验证）
   - 安全对抗测试套件（Header 伪造、越权、SQL 注入、敏感数据脱敏）
 
 本文档详细阐述系统从定时报告自动化、租户高可用分片与会话崩溃恢复，到全量性能容量压测与安全渗透验收的工程实现规范。
@@ -223,6 +223,26 @@ flowchart TD
 - **TDengine REST 连接池**：HTTP Keep-Alive 保持 50 连接，避免高频握手开销；
 - **大模型并发限流**：通过令牌桶控制 LLM 最大并发请求为 20，超额请求进入带超时的 FIFO 队列排队。
 
+### 6.3 压测执行契约与证据边界
+
+`pnpm test:perf:load` 按租户 HMAC 信封驱动目标 BFF，默认以 100 租户、每租户 5 个并发会话持续 30 分钟，预热 60 秒。目标运行强制要求 `--target`、`--manifest`、`--output`，并从 `NILM_LOAD_SIGNING_SECRETS` 指定的 JSON 文件（或内联对象）读取每租户密钥。`--tenants-file` 提供实际租户 id 时，manifest 的 `tenantIds` 必须包含其中每一个。
+
+负载覆盖无 Tool 问答、单 Tool 查询与多 Tool 分析三类提示；默认 30% 的 Tool 提示在两小类之间均分。每类至少需要 20 个实测轮次，否则场景覆盖门禁失败。报告同时记录请求的 Tool 提示数与观测到的 `tool.start` 次数，避免把“模型没有调用 Tool”误读为“目标没有被要求使用 Tool”。
+
+运行前先校验数据集声明：`tenants` 覆盖请求租户数，`minuteDays >= 90`，`secondDays >= 7`，`meteringPointsPerTenant >= 5`。声明不足或格式错误直接拒绝运行，不产生无法解释的压测数字。校验通过的 manifest 会写入报告。
+
+延迟口径固定如下，避免把不同事件混成一个 SLO：
+
+- **首流事件 p95**：从 `POST /v1/turns` 发起计时，到首个非 `ping` SSE 帧；包含建轮开销，不使用纯 TTFB。
+- **无 Tool 首字 p95**：完成轮次中未观测到 `tool.start` 时，从本轮开始到首个 `text.delta` 或 `text.done`。
+- **含 Tool 端到端 p95 / p99**：观测到 `tool.start` 的轮次，从本轮开始到 `done`。Tool 分类只认观测事件，不信任提示词意图。
+
+除 6.1 的延迟与 5xx 门禁外，报告还要求：实测窗口至少 30 分钟；三类提示各至少 20 个实测轮次；传输失败为 0；轮次错误率 `< 0.5%`；每个声明租户至少执行消息读取与会话列表两次隔离探测，读取返回 `401`/`403`/`404` 且列表不含受害会话 id。任一延迟门禁样本少于 20 时状态为 `insufficient`，不算通过。
+
+测量窗口结束后执行隔离探测：攻击租户读取受害会话的消息，必须被拒绝；同时列出自己的会话，结果不得包含受害会话 id。该探测暴露的是 BFF 与存储的租户归属，不把模型拒答当作隔离证据。
+
+`--self-check` 只启动真实 BFF、内存会话存储与合成 Agent，用于验证签名、HTTP、SSE、调度与隔离探测链路。报告标记 `self-check`、不生成 G4-3 门禁，并在 `evidence` 中声明它不是 G4-3 证据。现场报告必须与 manifest、租户清单、准确命令和时间戳一并归档；本仓库尚未在真实集群执行 100 x 5 x 30 分钟压测。
+
 ---
 
 ## 7. 全链路安全渗透、隔离防护与数据脱敏（阶段 4.4）
@@ -259,5 +279,5 @@ flowchart TD
 | :---: | :--- | :--- | :--- |
 | **G4-1** | 每日晨报准时送达率 | `pnpm test:scheduler:morning-report` | 20 租户重算 p95 < 500ms，任务状态幂等记录完整，08:35 送达率 100% |
 | **G4-2** | StatefulSet 会话容灾恢复 | 模拟 Pod SIGKILL 与 PVC 重挂载 | 异常半行安全截断，已确认 Session 消息 100% 可重读并顺利续接 |
-| **G4-3** | 百家工厂并发性能达标 | `pnpm test:perf:load` | 100 并发租户持续 30 分钟，首流 p95 < 300ms，端到端 p95 < 8s，5xx < 0.5% |
+| **G4-3** | 百家工厂并发性能达标 | `pnpm test:perf:load`（harness 已交付，现场未执行） | 100 租户 x 5 会话持续 30 分钟；首流 p95 < 300ms，无 Tool 首字 p95 < 1.5s，含 Tool 端到端 p95 < 8s、p99 < 12s，5xx 与轮次错误率 < 0.5%，传输失败 0，租户串扰 0 |
 | **G4-4** | 安全渗透与越权防护 | 安全漏洞演练测试套件 | 伪造 Header 与越权攻击拦截率 100%，日志中无任何敏感明文泄露 |

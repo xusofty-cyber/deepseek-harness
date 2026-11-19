@@ -34,6 +34,57 @@
 
 设置 `sessionsRoot` 后，租户的每个新 Session 以 `<sessionsRoot>/<编码后的租户>` 为工作目录，会话索引位于 `<sessionsRoot>/<编码后的租户>/.nilm/conversations/`。同一 PVC 上的替换 Pod 会重新加载索引、恢复 JSONL Session 并返回持久化历史；JSONL 后端读取时忽略撕裂崩溃尾部，并在首次追加前截断它。`shardIndex` 与 `shardCount` 会在触碰任何会话状态之前，以 `403 SCOPE_FORBIDDEN` 拒绝属于其他分片的已认证租户，因此边缘路由错误不会把租户写到错误的卷上。
 
+## 压测
+
+`pnpm test:perf:load` 驱动 G4-3 负载。目标运行按租户签署每个请求，在 60 秒预热后以 100 个租户、每租户 5 个并发会话持续 30 分钟。默认值是目标运行契约，不是冒烟测试：`--duration 30m`、`--warmup 60s`、`--tenants 100`、`--sessions 5`、均分为单 Tool 查询与多 Tool 分析的 30% Tool 提示占比，以及 30 秒本轮截止时间；`--help` 列出全部覆盖参数。
+
+目标运行缺少 `--target`、`--manifest`、`--output`，或 `NILM_LOAD_SIGNING_SECRETS` 未指向按租户 id 映射签名密钥的 JSON 文件时拒绝启动。脚本也接受内联 JSON 对象。密钥必须与部署一致，且不得进入仓库或报告。
+
+```sh
+NILM_LOAD_SIGNING_SECRETS=/secure/load-secrets.json \
+pnpm test:perf:load \
+  --target https://nilm.example.com \
+  --manifest load-dataset.json \
+  --tenants-file tenants.json \
+  --output g4-3-report.json
+```
+
+manifest 声明本次运行允许使用的数据集。覆盖不足或格式错误的声明会在产生流量前被拒绝：
+
+```json
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-19T00:00:00.000Z",
+  "tenants": 100,
+  "minuteDays": 90,
+  "secondDays": 7,
+  "meteringPointsPerTenant": 5,
+  "tenantIds": ["tenant-000", "tenant-001"]
+}
+```
+
+`tenants` 必须覆盖请求的租户数，`minuteDays` 至少 90，`secondDays` 至少 7，`meteringPointsPerTenant` 至少 5。`--tenants-file` 提供实际租户 id 时，`tenantIds` 必须声明其中每一个；校验后的 manifest 会写入报告。请把报告与 manifest、租户清单、准确命令和时间戳一起归档，因为报告是唯一持久化输出。
+
+报告测量以下观测：
+
+| 观测项 | 通过条件 |
+| :--- | :--- |
+| 首流事件 p95 | 从 `POST /v1/turns` 发起到首个非 `ping` SSE 帧 `< 300 ms`；包含建轮开销 |
+| 无 Tool 首字 p95 | 无观测 Tool 的完成轮次，从本轮开始到首个 `text.delta` 或 `text.done` `< 1.5 s` |
+| 含 Tool 端到端 p95 / p99 | 观测到 `tool.start` 的轮次，从本轮开始到 `done` `< 8 s` / `< 12 s` |
+| HTTP 5xx 错误率 | 压测 harness 发出的全部请求 `< 0.5%` |
+| 轮次错误率 | 已测量轮次 `< 0.5%`；完成轮次以 `done` 结束且无错误帧 |
+| 传输失败 | `0` |
+| 租户隔离 | `0` 泄漏；每个声明租户都执行消息读取与会话列表探测 |
+| 负载形状与窗口 | 至少 100 租户 x 5 会话，且至少 30 个实测分钟 |
+| 提示场景覆盖 | 无 Tool、单 Tool 与多 Tool 提示各至少 20 个实测轮次 |
+
+Tool 轮次只按观测到的 `tool.start` 分类；提示要求分析但未产生 Tool 调用的轮次不计入 Tool 样本。报告同时统计观测到的 Tool 调用数，使运维人员能区分“Tool 提示没有触发调用”和“目标从未被要求使用 Tool”。每个延迟与场景门禁至少需要 20 个样本；样本不足报告 `insufficient` 或 `fail`，绝不算通过。仅当全部门禁通过时进程退出 `0`，门禁失败退出 `1`，用法或配置错误退出 `2`。
+
+隔离阶段在测量窗口之后运行。另一租户读取每个受害会话并列出自己的会话；读取必须返回 `401`、`403` 或 `404`，列表不得包含受害会话 id。
+
+`pnpm test:perf:load --self-check --output /tmp/perf-self-check.json` 在内存会话存储与合成 Agent 上启动真实 BFF，覆盖签名、HTTP、SSE、轮次调度与隔离探测，不接触模型、数据库或集群。其报告标记为 `self-check`，不包含 G4-3 门禁，且 `evidence` 字段声明它不是 G4-3 证据。自检不能替代目标报告。
+
 ## 已知限制与延期工作
 
 - 阶段 1 未实现 mTLS，只接受 HMAC 信封。生产接入仍需补齐概要设计要求的 mTLS 路径。
@@ -44,3 +95,4 @@
 - 每轮缓冲与幂等记录在进程生命周期内保留；阶段 1 尚未实现淘汰或归档策略。
 - 安全审计当前以结构化文本写入插件日志；`nilm_security_audit` 持久化随审计存储集成交付。
 - 告警列表与确认委托给 `nilmSentinel`；该插件未挂载时按设计保持不可用。在签名请求契约接受查询参数前，不提供分页。
+- G4-3 harness 仅有离线测试。尚未产出 100 租户 x 5 会话、30 分钟的目标报告；自检验证的是 harness，不是服务容量。

@@ -20,6 +20,9 @@
 /deepseek-ai-dsh-nilm-service/pvc-state-and-shard-ownership:
   en: ee56ddb60b2f5431
   zh: 7e496b0d08a38151
+/deepseek-ai-dsh-nilm-service/load-testing:
+  en: 92e1c0227b2cbe79
+  zh: ec9104fa44eb3537
 /deepseek-ai-dsh-nilm-service/known-limitations-and-deferred-work:
-  en: a284ab5f71b1a7db
-  zh: 574da091263a3277
+  en: 45d24e6727763c0c
+  zh: 0a619bd294ff5d3f
