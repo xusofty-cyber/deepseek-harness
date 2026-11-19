@@ -29,6 +29,10 @@ export interface AuditEvent {
   readonly requestId?: string
   readonly tenantId?: string
   readonly userRef?: string
+  /** Session that produced the event when one exists. */
+  readonly sessionId?: string
+  /** Registered tool name for tool events; never model-generated text. */
+  readonly tool?: string
   readonly code?: string
 }
 
@@ -490,6 +494,8 @@ export class NilmHttpService {
             requestId: turn.requestId,
             tenantId: turn.tenantId,
             userRef: turn.userRef,
+            sessionId: turn.conversationId,
+            tool: event.tool,
             code: event.code,
           })
         }
@@ -574,6 +580,7 @@ export class NilmHttpService {
         type: 'conversation.persist-failed',
         tenantId: conversation.tenantId,
         userRef: conversation.userRef,
+        sessionId: conversation.sessionId,
         code: error instanceof Error ? error.name : 'UNKNOWN',
       })
       this.options.reportBackgroundFailure?.('conversation.persist', error)

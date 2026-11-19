@@ -6,6 +6,7 @@
 import { isAbsolute, resolve } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { resolveShardAssignment, type ShardAssignment } from '@deepseek-ai/dsh-nilm-sharding'
+import { UNVERIFIED_AUDIT_TENANT } from './audit.ts'
 
 /** Deployment-varying settings; no address, secret, or model id is compiled in. */
 export interface Config {
@@ -43,6 +44,10 @@ export interface Config {
   turnTimeoutMs?: number
   /** SSE keepalive interval. */
   pingIntervalMs?: number
+  /** Maximum queued security-audit events before new events are dropped. */
+  auditQueueSize?: number
+  /** Maximum security-audit rows written in one transaction. */
+  auditBatchSize?: number
 }
 
 /** Loader schema with deployment-safe defaults. */
@@ -62,6 +67,8 @@ export const Config: z<Config> = z.object({
   nonceTtlMs: z.natural().min(1).default(600_000),
   turnTimeoutMs: z.natural().min(1).default(60_000),
   pingIntervalMs: z.natural().min(1).default(15_000),
+  auditQueueSize: z.natural().min(1).default(1_024),
+  auditBatchSize: z.natural().min(1).default(64),
 })
 
 /** Configuration after defaults have been applied. */
@@ -80,6 +87,8 @@ export interface ResolvedConfig {
   nonceTtlMs: number
   turnTimeoutMs: number
   pingIntervalMs: number
+  auditQueueSize: number
+  auditBatchSize: number
 }
 
 /**
@@ -100,6 +109,9 @@ export function resolveConfig(config: Config): ResolvedConfig {
   if (provider.trim() === '') throw new TypeError('provider must be a non-empty string')
   const secrets: Record<string, string> = {}
   for (const [tenantId, secret] of Object.entries(config.signingSecrets)) {
+    if (tenantId === UNVERIFIED_AUDIT_TENANT) {
+      throw new TypeError(`tenant id '${UNVERIFIED_AUDIT_TENANT}' is reserved for unverified audit events`)
+    }
     if (tenantId.trim() === '' || secret.length < 16) {
       throw new TypeError('each signing secret requires a non-empty tenant and at least 16 characters')
     }
@@ -120,5 +132,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
     nonceTtlMs: config.nonceTtlMs ?? 600_000,
     turnTimeoutMs: config.turnTimeoutMs ?? 60_000,
     pingIntervalMs: config.pingIntervalMs ?? 15_000,
+    auditQueueSize: config.auditQueueSize ?? 1_024,
+    auditBatchSize: config.auditBatchSize ?? 64,
   }
 }

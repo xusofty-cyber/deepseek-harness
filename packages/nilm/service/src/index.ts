@@ -7,7 +7,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { AlertPage } from '@deepseek-ai/dsh-nilm-sentinel'
-import { redactText, redactValue } from '@deepseek-ai/dsh-nilm-core'
+import { NilmError, redactText, redactValue } from '@deepseek-ai/dsh-nilm-core'
+import {
+  BufferedSecurityAuditSink,
+  SqlSecurityAuditStore,
+} from './audit.ts'
 import { Config, resolveConfig, type Config as NilmServiceConfig } from './config.ts'
 import { FileConversationStore, MemoryConversationStore } from './conversations.ts'
 import { NilmHttpService, type AlertListPage } from './http.ts'
@@ -40,6 +44,16 @@ export {
   type AuditEvent,
   type NilmHttpServiceOptions,
 } from './http.ts'
+export {
+  BufferedSecurityAuditSink,
+  SqlSecurityAuditStore,
+  UNVERIFIED_AUDIT_TENANT,
+  type AuditTransaction,
+  type AuditTransactionRunner,
+  type BufferedSecurityAuditOptions,
+  type SecurityAuditRow,
+  type SecurityAuditStore,
+} from './audit.ts'
 export {
   AuthError,
   NonceStore,
@@ -79,6 +93,17 @@ export function apply(ctx: Context, config: NilmServiceConfig): void {
   const conversations = resolved.sessionsRoot === undefined
     ? new MemoryConversationStore()
     : new FileConversationStore(resolved.sessionsRoot)
+  const auditSink = new BufferedSecurityAuditSink({
+    store: new SqlSecurityAuditStore(ctx.nilmSource),
+    capacity: resolved.auditQueueSize,
+    batchSize: resolved.auditBatchSize,
+    onError: (error, dropped) => {
+      ctx.logger.error(`nilm.security audit write dropped ${String(dropped)} event(s): ${failureLabel(error)}`)
+    },
+    onOverflow: dropped => {
+      ctx.logger.error(`nilm.security audit queue is full; dropped ${String(dropped)} event(s)`)
+    },
+  })
   const sentinel = ctx.get('nilmSentinel')
   const service = new NilmHttpService({
     config: resolved,
@@ -93,7 +118,10 @@ export function apply(ctx: Context, config: NilmServiceConfig): void {
       && ctx.get('nilmSafety') !== undefined
       && ctx.get('agents') !== undefined
       && ctx.get('sessions') !== undefined,
-    audit: event => { ctx.logger.warn(`nilm.security ${JSON.stringify(redactValue(event))}`) },
+    audit: event => {
+      ctx.logger.warn(`nilm.security ${JSON.stringify(redactValue(event))}`)
+      auditSink.record(event)
+    },
     reportBackgroundFailure: (operation, error) => {
       ctx.logger.error(redactText(`${operation} failed: ${error instanceof Error ? error.message : String(error)}`))
     },
@@ -109,8 +137,20 @@ export function apply(ctx: Context, config: NilmServiceConfig): void {
       address => { ctx.logger.info(redactText(`nilm-service listening on ${address.address}:${String(address.port)}`)) },
       error => { ctx.logger.error(redactText(`nilm-service failed to listen: ${String(error)}`)) },
     )
-    return async () => { await service.close() }
+    return async () => {
+      try {
+        await service.close()
+      } finally {
+        await auditSink.close()
+      }
+    }
   }, 'nilm-service.http')
+}
+
+/** Return a stable failure label without echoing driver messages that may contain bound values. */
+function failureLabel(error: unknown): string {
+  if (error instanceof NilmError) return error.code
+  return error instanceof Error ? error.name : 'UNKNOWN'
 }
 
 /**

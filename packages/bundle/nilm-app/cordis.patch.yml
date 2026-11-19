@@ -175,6 +175,8 @@
         model: !!js process.env.NILM_MODEL ?? 'deepseek-chat'
         reasoningModel: !!js process.env.NILM_REASONING_MODEL ?? 'deepseek-reasoner'
         signingSecrets: !!js JSON.parse(process.env.NILM_SIGNING_SECRETS ?? '{}')
+        auditQueueSize: !!js Number(process.env.NILM_AUDIT_QUEUE_SIZE ?? 1024)
+        auditBatchSize: !!js Number(process.env.NILM_AUDIT_BATCH_SIZE ?? 64)
 
     # Runs last: the registered tool surface may contain only nilm_* tools.
     # Any shell, file, web, MCP, or subagent

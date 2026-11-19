@@ -6,7 +6,7 @@ Backend BFF for the standalone NILM agent. It verifies caller envelopes, owns co
 
 ## Configuration
 
-All deployment values come from the profile patch or `NILM_*` environment variables: bind host and port, session working directory, optional PVC sessions root, shard index and count, model provider and ids, per-tenant HMAC secrets, clock skew, nonce TTL, turn timeout, ping interval, and body limit. The package compiles no database address, secret, or model id.
+All deployment values come from the profile patch or `NILM_*` environment variables: bind host and port, session working directory, optional PVC sessions root, shard index and count, model provider and ids, per-tenant HMAC secrets, clock skew, nonce TTL, turn timeout, ping interval, body limit, and the security-audit queue and batch sizes. The package compiles no database address, secret, or model id.
 
 ## Endpoints
 
@@ -91,7 +91,9 @@ The isolation phase runs after the measurement window. Another tenant reads each
 
 An authentication failure emits `auth.rejected`. Every other refusal emits `request.rejected`, carrying the verified tenant only when identity verification already succeeded. A tool failure carrying `INVALID_ARGS`, `SCOPE_FORBIDDEN`, or an unavailable tenant context emits `tool.rejected`; the SQL guard emits `sql.rejected` before a driver sees the statement. Audit records never contain request bodies, model prompts, phone numbers, OpenID values, signatures, or tokens. Plugin log messages pass through `redactText`, and structured audit values through `redactValue`, masking mainland mobile numbers as `138****0000`, labeled or raw OpenID values, bearer credentials, API keys, and `v1=` signatures. The suite asserts that every declared case ran, so deleting or renaming a case fails it.
 
-Offline evidence ends at interception and audit emission. It does not prove production log retention, KMS-backed database encryption, or provider-side model handling. Sessions intentionally retain the model-visible user request, so G4-4 cannot be met by asserting that the raw question is absent; the production review must show Session access control and encryption, an audited log sink, and a `nilm_security_audit` store. G4-4 still requires that review and a no-Critical/no-High finding.
+With the NILM app profile, every BFF audit event is also queued for `nilm_security_audit`. `NILM_AUDIT_QUEUE_SIZE` (default `1024`) bounds the queue and `NILM_AUDIT_BATCH_SIZE` (default `64`) sets the rows per transaction. A full queue drops the newest event, and a failed transaction drops that batch after its size is logged; events are not retried, so the redacted structured log remains the fallback. Authentication failures use `tenant_id = __unverified__` because no tenant was verified, and no unverified header value is stored; `__unverified__` is reserved and rejected in `signingSecrets`.
+
+Offline evidence ends at interception, audit emission, and an in-process persistence fake. It does not prove production log retention, KMS-backed database encryption, the one-year audit retention promise, or provider-side model handling. Sessions intentionally retain the model-visible user request, so G4-4 cannot be met by asserting that the raw question is absent; the production review must show Session access control and encryption, an audited log sink, and a durable `nilm_security_audit` store. G4-4 still requires that review and a no-Critical/no-High finding.
 
 ## Known Limitations and Deferred Work
 
@@ -101,7 +103,7 @@ Offline evidence ends at interception and audit emission. It does not prove prod
 - Shard count changes and tenant migration are deployment operations. The BFF refuses a tenant on a non-owning shard but never migrates Session files, and cross-shard drift recovery is not promised.
 - Offline tests cover tenant directory layout, conversation reload, torn-tail reads, and Session write exclusion. A real StatefulSet SIGKILL and PVC reattach still require a cluster rehearsal.
 - Turn buffers and idempotency entries are retained for the process lifetime; stage 1 has no eviction or archival policy for them.
-- Audit records reach the plugin logger with in-process masking; `nilm_security_audit` persistence and production log-sink retention evidence are still pending.
+- Audit records are masked in the plugin log and written to `nilm_security_audit` through a bounded best-effort queue. Queue overflow and database failures drop events after a logged count; there is no retry, outbox, or retention job. Production log-sink retention and KMS-backed encryption evidence remain pending.
 - Alert listing and acknowledgement delegate to `nilmSentinel`; they remain unavailable by design when that plugin is not mounted. Pagination is not exposed until the signed-request contract accepts query parameters.
 - The G4-3 harness has offline tests only. No 100-tenant x 5-session, 30-minute target report has been produced; a self-check validates the harness, not service capacity.
 - The G4-4 attack corpus is offline. Production log review, KMS/AES-GCM verification, audit-store retention, and a no-Critical/no-High security finding remain outstanding.

@@ -1,113 +1,105 @@
 # Session: 2026-11-19
 
 **Started:** 2026-11-19 (Asia/Shanghai)
-**Last Updated:** 2026-11-19 10:30 CST
+**Last Updated:** 2026-11-19 11:00 CST
 **Project:** `/home/picohood/projects/opensource/deepseek-harness`
-**Topic:** NILM 阶段 4.4：版本化安全攻击套件、审计链路与日志脱敏（离线部分）
+**Topic:** NILM 阶段 4.4 补强：BFF 安全审计写入 `nilm_security_audit`（离线部分）
 
 ---
 
 ## What We Are Building
 
-在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。阶段 1/2/3、4.1、4.2、4.3 已提交；最新提交 `b3f2b6ed92` 为 G4-3 压测 harness。
+在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。阶段 1/2/3、4.1、4.2、4.3、4.4 已提交；基线提交为 `29eacd914b`。
 
-本会话完成 WBS 4.4 的离线实现：新增 `4.4.1` 版本化攻击语料（32 个用例）、BFF 拒绝审计、Tool 安全失败审计、SQL 守卫拒绝审计、统一日志脱敏纯函数，并把 service 测试脚手架提取为共享 harness。G4-4 现场证据门仍开放：生产日志审查、KMS/AES-GCM 存储验证、`nilm_security_audit` 落库与无 Critical/High 的安全结论均未执行。
+本轮补齐 G4-4 的离线审计落库缺口：BFF 审计事件不再只写 logger，还经有界异步队列批量写入 `nilm_security_audit`。G4-4 现场门仍开放：真实 MySQL/KMS 验证、生产日志汇留存、一年保留证据与安全负责人签署均未执行。
 
 ---
 
 ## What WORKED (with evidence)
 
-- **版本化攻击套件** — `packages/nilm/service/tests/security-pentest.spec.ts` 声明 `PENTEST_SUITE_VERSION = '4.4.1'` 与 32 个攻击用例，末项用例断言清单内每个 id 都被真实执行；命令为 `pnpm test:security:pentest`。confirmed by: 34 通过（32 攻击 + 1 授权基线 + 1 完整性，2026-11-19 10:23 CST）。
-- **四层覆盖** — BFF 信封/重放/伪造租户/双租户读取与列表隔离 17 例；SQL 守卫写语句、多语句、注释、字面量、非白名单表、锁读、SLEEP 8 例；Tool 注入 `tenant_id`/`target_tenant_id`/`allowed_scope` 被闭集 Schema 以 `INVALID_ARGS` 拒绝并审计、缺失上下文、越权 Scope 共 5 例；`CallContext` 冻结与重绑定 2 例。
-- **拒绝审计** — BFF 认证失败写 `auth.rejected`（不记录未认证 Header）；其余拒绝写 `request.rejected`，仅在身份校验已通过时携带租户；Tool 安全失败写 `tool.rejected`；SQL 守卫拒绝写 `sql.rejected`。`packages/nilm/service/src/http.ts` 用 `WeakSet` 避免同一错误重复审计。
-- **脱敏纯函数** — `packages/nilm/core/src/redact.ts` 提供 `redactText`/`redactValue`：手机号掩码为 `138****8000`，OpenID、Bearer/Authorization、API Key、`x-nilm-signature` 与裸 `v1=` 签名替换为 `<redacted>`。confirmed by: `packages/nilm/core/tests/redact.spec.ts` 5 通过。
-- **日志接入** — service、scheduler、sentinel、notify 的 logger 消息经 `redactText`；service 审计序列化经 `redactValue`；source 与 tools 的审计事件只含事件类型、来源/工具名与稳定错误码。
-- **service 测试** — confirmed by: 5 个文件，83 通过、1 跳过（`perf-load` loopback 因沙箱 `EPERM` 跳过）。
-- **全部 NILM 离线用例** — confirmed by: 44 个文件、364 通过、1 跳过（2026-11-19 10:23 CST）。4.3 基线为 42 文件 / 325 通过；本阶段新增 2 文件 / 39 通过。
-- **同分片恢复用例** — confirmed by: `recovery.spec.ts` 1 通过、1 跳过；跳过项仍需要本机未安装的原生 `flock` addon。
-- **类型检查** — confirmed by: 临时 `noEmit` 配置覆盖全部 `packages/nilm/*/src`，零错误；覆盖 service 测试时仅剩既有 `recovery.spec.ts` 对 `@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts` 的路径解析错误（环境缺工作区依赖），新增/改动文件无错误。
-- **文档门禁** — confirmed by: translation pairing 1 对一致；limitations 398 个通过；model experience 398 个通过；doc refs 5268 个可解析；doc budgets 7 个在预算内；md links 2648 个通过。
+- **参数化批量仓储** — `packages/nilm/service/src/audit.ts` 的 `SqlSecurityAuditStore` 在一个 source 事务内写入多行，绑定 `audit_id`、`tenant_id`、`user_ref`、`session_id`、`event_type`、`tool`、`error_code`，不拼接事件值。
+- **有界异步队列** — `BufferedSecurityAuditSink` 保持事件顺序，按批写入；队列满丢弃最新事件并计数，事务失败记录批量后继续排空，关闭时等待最终批次。默认容量 `1024`、批量 `64`，可由配置与 `NILM_AUDIT_QUEUE_SIZE` / `NILM_AUDIT_BATCH_SIZE` 调整。
+- **认证失败语义** — 未验签事件使用 `tenant_id = __unverified__`；不写入调用方伪造的 Header 值。其余 BFF 事件在身份验证后携带租户、用户与会话。
+- **审计字段补强** — `tool.rejected` 事件新增 `sessionId` 与 `tool`；`conversation.persist-failed` 新增 `sessionId`，使落库行可关联到会话与工具。
+- **离线用例** — `packages/nilm/service/tests/audit.spec.ts` 5 个用例覆盖参数绑定、队列上界、写入失败续写、关闭后拒绝与配置默认值。confirmed by: 聚焦套件 53 通过（audit 5 + http 14 + pentest 34，2026-11-19 10:55 CST）。
+- **全量 NILM** — confirmed by: 45 个文件、369 通过、1 跳过（`perf-load` loopback 因沙箱 `EPERM` 跳过，2026-11-19 10:59 CST）。
+- **类型检查** — confirmed by: 临时 `noEmit` 配置覆盖全部 `packages/nilm/*/src`，NILM 路径零错误；覆盖 service 测试时仅剩既有 `recovery.spec.ts` 的工作区路径解析错误。
+- **文档门禁** — confirmed by: translation pairing 1 对一致；limitations 398 个通过；model experience 398 个通过；doc refs 5270 个可解析；doc budgets 7 个在预算内；md links 2648 个通过；双语配对哈希已重算。
 - **`git diff --check`** — confirmed by: 空白与行尾检查通过。
 
 ---
 
 ## What Did NOT Work (and why)
 
-- **G4-4 现场证据门** — 未执行：没有真实双租户安全测试环境、生产日志汇、KMS/AES-GCM 数据库与 `nilm_security_audit` 落库。离线套件不能替代安全负责人签署的无 Critical/High 结论。
-- **生产日志脱敏验证** — 未执行：只验证了进程内纯函数与 logger 包装；未采集生产日志样本证明无手机号/OpenID/Token 明文。
-- **`nilm_security_audit` 持久化** — 未实现：审计仍写插件 logger；表 DDL 已存在，但 BFF 尚未接入审计存储。
-- **模型供应商侧隐私** — 未验证：报告摘要是否只含脱敏指标需在真实模型调用链复核；Session 按“模型可见⟺已记录”保留原始提问，不能用“删除原始提问”满足 G4-4。
-- **`pnpm` 命令** — 未执行：本机 `pnpm` 直接段错误。测试使用 pnpm store 中的 vitest 直接运行；文档门禁用 `node --experimental-transform-types`。
+- **真实 MySQL 落库** — 未执行：没有可用 `nilm_system` 数据库。离线测试只验证 SQL 形状、参数绑定与队列语义，不证明真实表写入、锁等待或死锁行为。
+- **G4-4 现场门** — 未通过：真实双租户安全环境复验、生产日志汇留存、KMS/AES-GCM 密文验证、`nilm_security_audit` 一年保留与安全负责人签署均未完成。
+- **审计可靠性边界** — 当前是尽力写入：队列溢出丢弃最新事件，事务失败丢弃该批，事件不重试，也没有 Outbox 或保留任务。失败会记录稳定错误码与丢弃数量；脱敏结构化日志仍是兜底证据。
+- **Tool/SQL 守卫原始事件** — `nilm-tools` 的 `tool.rejected` 与 `nilm-source` 的 `sql.rejected` 仍只写结构化日志。BFF 收到的安全 Tool 失败会落库为 `tool.rejected`，但 SQL 守卫自身事件尚未接入共享审计存储。
+- **`pnpm` 命令** — 未执行：本机 `pnpm` 直接段错误。测试使用 pnpm store 中的 vitest 直跑；文档门禁用 `node --experimental-transform-types`。
 - **覆盖率门禁** — 未执行：临时环境缺 `@vitest/coverage-v8`；新增逻辑有行为用例，但未计入 per-file 100% 覆盖率统计。
-- **`git commit`** — 未执行：按用户要求由用户管理提交；4.4 改动仍在工作树。
+- **`verify-empty-catch`** — 未完成：沙箱内脚本 `spawnSync git` 返回 `EPERM`；申请沙箱外审批时自动审批服务返回 402，未能执行。当前改动没有空 `catch`。
+- **`verify-cordis-config`** — 未完成：本机缺 `@deepseek-ai/cordis-plugin-include` workspace 解析，脚本无法启动。
+- **`verify-export-jsdoc`** — 仓库级扫描报 19 个既有违规，均位于本轮未修改的文件；新增 `audit.ts` 与 `index.ts` 导出未出现在违规列表。
+- **`git commit`** — 未执行：按用户要求由用户管理提交。
 
 ---
 
 ## Key File Status
 
-| File | Status | Summary |
+| Path | Status | Summary |
 | :--- | :--- | :--- |
-| `packages/nilm/service/tests/security-pentest.spec.ts` | Added | `4.4.1` 版本化 32 用例攻击语料与完整性断言 |
-| `packages/nilm/service/tests/support/harness.ts` | Added | Fake 请求/响应/会话/运行时、签名调用与审计捕获 |
-| `packages/nilm/service/tests/http.spec.ts` | Modified | 改用共享 harness，删除重复脚手架 |
-| `packages/nilm/core/src/redact.ts` | Added | `redactText`/`redactValue` 手机号、OpenID、Token、签名脱敏 |
-| `packages/nilm/core/tests/redact.spec.ts` | Added | 5 个脱敏与结构保持用例 |
-| `packages/nilm/service/src/http.ts` | Modified | `auth.rejected`/`request.rejected`/`tool.rejected` 审计；拒绝去重；`TurnRecord.requestId` |
-| `packages/nilm/service/src/runtime.ts` | Modified | Tool 失败事件透传稳定错误码 |
-| `packages/nilm/service/src/index.ts` | Modified | 审计与错误日志经脱敏 |
-| `packages/nilm/tools/src/index.ts` | Modified | Tool 安全失败审计包装；`apply` 显式装配 host |
-| `packages/nilm/source/src/index.ts` | Modified | SQL 守卫拒绝审计 `sql.rejected` |
-| `packages/nilm/scheduler|sentinel|notify/src/index.ts` | Modified | logger 消息经 `redactText` |
-| `package.json` | Modified | 新增 `test:security:pentest` |
-| `pnpm-lock.yaml` | Modified | 同步 service devDeps 与 tools 的 `dsh-error` 依赖 |
-| `packages/nilm/service/README.md/.zh.md/.i18n.yaml` | Modified | Security testing 章节、证据边界与限制，配对已重算 |
-| `docs/nilm-ai-agent-development-plan.md` | Modified | G4-4 方法与状态改为“离线已交付，现场未执行” |
-| `docs/nilm-ai-agent-detailed-design-phase4.md` | Modified | §7.2 脱敏实现、§7.3 攻击套件与审计证据、§8 G4-4 行 |
+| `packages/nilm/service/src/audit.ts` | New | `SqlSecurityAuditStore`、`BufferedSecurityAuditSink`、行映射、默认值与未认证租户标记 |
+| `packages/nilm/service/tests/audit.spec.ts` | New | 参数绑定、批量、溢出、失败、关闭、配置测试 |
+| `packages/nilm/service/src/config.ts` | Modified | `auditQueueSize`、`auditBatchSize` 及默认值 |
+| `packages/nilm/service/src/index.ts` | Modified | 构造审计队列、日志与落库并行、关闭时排空、稳定失败标签 |
+| `packages/nilm/service/src/http.ts` | Modified | `AuditEvent` 新增 `sessionId`/`tool`；Tool 与会话失败事件填充字段 |
+| `packages/nilm/service/tests/security-pentest.spec.ts` | Modified | BFF-17 断言 Tool 拒绝审计携带会话与工具 |
+| `packages/bundle/nilm-app/cordis.patch.yml` | Modified | 暴露 `NILM_AUDIT_QUEUE_SIZE` 与 `NILM_AUDIT_BATCH_SIZE` |
+| `deploy/k8s/configmap.yaml` | Modified | 写入默认审计队列与批量值 |
+| `packages/nilm/service/README.md/.zh.md/.i18n.yaml` | Modified | 审计持久化、失败语义、证据边界与限制 |
+| `docs/nilm-ai-agent-high-level-design.md` | Modified | 审计状态从“未落库”改为“尽力写入” |
+| `docs/nilm-ai-agent-development-plan.md` | Modified | G4-4 证据与现场剩余项 |
+| `docs/nilm-ai-agent-detailed-design-phase4.md` | Modified | §7.3 审计持久化、§8 G4-4 行 |
 
 ---
 
 ## Architecture Decisions
 
-- **攻击语料与测试同源** — 版本号、用例清单与执行断言在同一 spec 中，避免文档清单与代码漂移；末项用例强制检查 100% 执行。
-- **BFF 认证失败不记录未认证租户** — `AuthError` 只写稳定 `code`；防止攻击者伪造 Header 污染审计。其余拒绝在身份校验已通过时才写租户与用户引用。
-- **Tool 审计在包装层做** — 闭集 Schema 未声明的参数在 Tool 体内执行前以 `INVALID_ARGS` 拒绝；只记录工具名与稳定错误码，不记录模型参数或结果摘要；SQL 审计只记录来源与拒绝码，不记录原始 SQL。
-- **脱敏放在 core 纯函数** — service/scheduler/sentinel/notify/source/tools 共用，不修改 vendored Cordis logger；`redactValue` 保留 JSON 结构。
-- **Session 原始提问保留** — 遵守“模型可见⟺已记录”；G4-4 的生产证据改为访问控制、加密与审计留存评审，而不是删除 Session 内容。
-- **共享 harness** — service 测试的 Fake 组件集中到 `tests/support/harness.ts`，新攻击套件与既有 HTTP 用例复用同一签名/路由行为。
+- **写路径放在 service，事务复用 source** — `SqlSecurityAuditStore` 只依赖结构化的 `AuditTransactionRunner`，由 `ctx.nilmSource` 提供事务；BFF 不直接依赖 MySQL 驱动。
+- **请求路径不等待数据库** — `record` 只入队；后台串行排空。HTTP 处理、SSE 与取消不被审计写入延迟阻塞。
+- **有界队列显式丢弃** — 队列满丢弃最新事件并计数，避免攻击流量导致进程内存无界增长；失败不重试，因为日志仍是同事件的兜底副本。
+- **未认证事件使用合成租户** — 验签失败没有可信租户，写入 `__unverified__` 而不是调用方 Header；避免污染真实租户审计并按事件类型集中检索。`resolveConfig` 拒绝配置同名租户，防止合成值与真实租户冲突。
+- **错误日志只写稳定标签** — 数据库失败只记录 `NilmError.code` 或 `Error.name`，不回显驱动错误消息，避免错误文本携带绑定值或凭证。
+- **批量参数化 SQL** — 行数决定占位符数量，所有值走参数绑定；`audit_id` 使用服务端 `randomUUID`。
 
 ---
 
 ## Blockers & Open Questions
 
-- G4-4 现场门未通过：需真实双租户环境复验 32 个攻击用例，并采集生产日志、审计存储与数据库密文证据。
-- `nilm_security_audit` 持久化未接入；当前审计只在插件 logger 中可见，进程重启后不保留。
-- 生产日志汇的保留、轮转、访问控制与脱敏验证由运维/安全团队完成；仓库不能提供该证据。
-- KMS/Secret 注入与 AES-GCM 密文存储需部署环境验证；仓库只有接收方密文字段与 DDL。
-- 报告摘要上送模型的字段范围需在真实调用链复核，避免工厂名称、精确位置等进入提示词。
-- `nilm-edge` 网关仍归平台团队；仓库只提供端点载体与路由契约。
+- G4-4 现场门未通过：需真实双租户环境复验 32 个攻击用例，并采集生产日志、审计表行、保留与密文证据。
+- 审计写入是尽力语义；生产是否需要 Outbox/重试、丢弃告警阈值与告警路由仍需安全/运维确认。
+- `nilm_security_audit` 没有自动保留/归档任务，DDL 注释的“至少一年”仍需数据库运维实现并出示证据。
+- `user_ref` 等 Header 长度尚未按表字段上限校验；超长值会使该批审计插入失败。生产前应统一约束或采用稳定摘要。
+- Tool/SQL 守卫原始审计事件仍为 logger-only；如需单表完整链路，需要共享审计服务或让领域插件接入同一存储。
+- G4-1/G4-2/G4-3 现场演练仍未闭环。
 
 ---
 
 ## Exact Next Step
 
-1. 在可写 `.git` 的正常终端提交 4.4：
+1. 在可写 `.git` 的正常终端提交本轮改动：
 
 ```sh
 cd /home/picohood/projects/opensource/deepseek-harness
-git add package.json pnpm-lock.yaml packages/nilm/core packages/nilm/service packages/nilm/tools packages/nilm/source packages/nilm/scheduler packages/nilm/sentinel packages/nilm/notify docs/nilm-ai-agent-development-plan.md docs/nilm-ai-agent-detailed-design-phase4.md SESSION_STATE.md
-git commit -m "feat(nilm): add G4-4 security pentest and log redaction"
+git add deploy/k8s/configmap.yaml docs/nilm-ai-agent-detailed-design-phase4.md docs/nilm-ai-agent-development-plan.md docs/nilm-ai-agent-high-level-design.md packages/bundle/nilm-app/cordis.patch.yml packages/nilm/service/README.md packages/nilm/service/README.zh.md packages/nilm/service/README.i18n.yaml packages/nilm/service/src/audit.ts packages/nilm/service/src/config.ts packages/nilm/service/src/http.ts packages/nilm/service/src/index.ts packages/nilm/service/tests/audit.spec.ts packages/nilm/service/tests/security-pentest.spec.ts SESSION_STATE.md
+git commit -m "feat(nilm): persist BFF security audit rows"
 ```
 
-2. 本地复跑离线证据：
+2. 在真实 MySQL 执行一次离线写入验证：启动 source、触发跨租户拒绝、查询 `nilm_security_audit`，确认租户、事件、工具、会话与错误码正确且无请求体/提示词。
 
-```sh
-pnpm test:security:pentest
-pnpm run test
-```
+3. 决定是否把 Tool/SQL 守卫事件接入同一审计存储；若需要单表完整链路，新增共享审计 seam，而不是从领域插件直接访问 MySQL。
 
-3. 在真实双租户安全环境复验攻击套件，并归档命令、时间戳、日志样本与审计表查询结果；任何用例未拦截或未写审计都不得声称 G4-4 通过。
-
-4. 完成生产日志审查、KMS/AES-GCM 验证与 `nilm_security_audit` 落库后，由安全负责人签署无 Critical/High 结论；随后再进入阶段 4 全量交付验收。
+4. 继续现场证据闭环：先做 G4-2 的 K8s SIGKILL/PVC 演练，再做 G4-3 的 100 x 5 x 30 分钟压测，最后完成 G4-4 安全评审签署。
 
 ---
 
@@ -118,8 +110,6 @@ pnpm run test
 ```sh
 V=$(find ~/.local/share/pnpm/store/v11/links/@/vitest -name vitest.mjs | head -1)
 node "$V" run --config /tmp/vitest.nilm.config.mjs
-node "$V" run --config /tmp/vitest.nilm.config.mjs packages/nilm/service/tests
-node "$V" run --config /tmp/vitest.recovery.config.mjs
 ```
 
 - 类型检查（临时配置 `/tmp/tsconfig.nilm-44-src.json` 覆盖全部 NILM src）：
@@ -140,4 +130,4 @@ node --experimental-transform-types scripts/verify-doc-budgets.ts
 node --experimental-transform-types scripts/verify-md-links.ts
 ```
 
-- 当前环境 `pnpm` 段错误；`tsx` 与工作区依赖不完整，CLI 无法在本机直接启动。不要反复重试提权；回环监听被沙箱拒绝是已知限制。
+- 当前环境 `pnpm` 段错误；`tsx` 与工作区依赖不完整。不要反复重试提权；回环监听被沙箱拒绝是已知限制。
