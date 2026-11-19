@@ -14,7 +14,7 @@ import {
 } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { NilmError, type SessionId, type TenantId } from '@deepseek-ai/dsh-nilm-core'
+import { NilmError, SECURITY_TOOL_FAILURE_CODES, type SessionId, type TenantId } from '@deepseek-ai/dsh-nilm-core'
 import { shardForTenant, type ShardAssignment } from '@deepseek-ai/dsh-nilm-sharding'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { AuthError, NonceStore, verifyRequest, type VerifiedCaller } from './auth.ts'
@@ -116,6 +116,7 @@ interface TurnRecord {
   readonly conversationId: string
   readonly tenantId: TenantId
   readonly userRef: string
+  readonly requestId: string
   readonly createdAt: number
   readonly buffer: TurnEventBuffer
   readonly agent: NilmAgentSession
@@ -157,6 +158,7 @@ export class NilmHttpService {
   private readonly idempotency = new Map<string, { turnId: string; expiresAt: number }>()
   private readonly streams = new Set<NilmHttpResponse>()
   private readonly pendingWrites = new Set<Promise<void>>()
+  private readonly auditedFailures = new WeakSet<object>()
   private closing = false
   private listening = false
 
@@ -213,14 +215,19 @@ export class NilmHttpService {
    * @param res - HTTP response.
    */
   async handleRequest(req: NilmHttpRequest, res: NilmHttpResponse): Promise<void> {
+    const state: { caller?: VerifiedCaller } = {}
     try {
-      await this.route(req, res)
+      await this.route(req, res, state)
     } catch (error) {
-      this.sendFailure(res, error)
+      this.sendFailure(res, error, state.caller)
     }
   }
 
-  private async route(req: NilmHttpRequest, res: NilmHttpResponse): Promise<void> {
+  private async route(
+    req: NilmHttpRequest,
+    res: NilmHttpResponse,
+    state: { caller?: VerifiedCaller },
+  ): Promise<void> {
     if (this.closing) {
       this.sendJson(res, 503, { code: 'SOURCE_UNAVAILABLE', message: 'service is shutting down' })
       return
@@ -256,6 +263,7 @@ export class NilmHttpService {
       clockSkewMs: this.options.config.clockSkewMs,
       nonceTtlMs: this.options.config.nonceTtlMs,
     })
+    state.caller = caller
     this.assertShardOwnership(caller)
     if (caller.allowedScope === undefined) this.auditSecurity(caller, 'scope-defaulted-tenant-wide')
     if (path === '/v1/conversations' && req.method === 'POST') {
@@ -406,6 +414,7 @@ export class NilmHttpService {
       conversationId: conversation.id,
       tenantId: caller.tenantId,
       userRef: caller.userRef,
+      requestId: caller.requestId,
       createdAt: now,
       buffer,
       agent,
@@ -475,6 +484,15 @@ export class NilmHttpService {
         })
         break
       case 'tool-result': {
+        if (event.status === 'failed' && event.code !== undefined && SECURITY_TOOL_FAILURE_CODES.has(event.code)) {
+          this.audit({
+            type: 'tool.rejected',
+            requestId: turn.requestId,
+            tenantId: turn.tenantId,
+            userRef: turn.userRef,
+            code: event.code,
+          })
+        }
         this.append(turn, 'tool.result', {
           turnId: turn.id,
           callId: event.callId,
@@ -733,11 +751,13 @@ export class NilmHttpService {
     const shard = this.options.shard
     if (shard === undefined) return
     if (shardForTenant(caller.tenantId, shard.count) === shard.index) return
+    const error = new NilmError('SCOPE_FORBIDDEN', 'tenant is assigned to another shard')
     this.auditSecurity(caller, 'tenant-shard-mismatch', 'SCOPE_FORBIDDEN')
-    throw new NilmError('SCOPE_FORBIDDEN', 'tenant is assigned to another shard')
+    this.auditedFailures.add(error)
+    throw error
   }
 
-  private sendFailure(res: NilmHttpResponse, error: unknown): void {
+  private sendFailure(res: NilmHttpResponse, error: unknown, caller: VerifiedCaller | undefined): void {
     if (closureClosed(res)) return
     if (res.headersSent) {
       res.end()
@@ -750,7 +770,35 @@ export class NilmHttpService {
     const message = error instanceof NilmError && code !== 'INTERNAL_ERROR'
       ? error.message
       : 'internal service failure'
+    this.auditFailure(error, code, caller)
     this.sendJson(res, status, { code, message, requestId: 'unavailable' })
+  }
+
+  /**
+   * Record one refused request. Authentication failures happen before tenant
+   * identity is verified, so their audit record carries only the stable code;
+   * including caller-supplied headers would let an attacker forge audit data.
+   */
+  private auditFailure(error: unknown, code: string, caller: VerifiedCaller | undefined): void {
+    if (typeof error === 'object' && error !== null) {
+      if (this.auditedFailures.has(error)) return
+      this.auditedFailures.add(error)
+    }
+    if (error instanceof AuthError) {
+      this.audit({ type: 'auth.rejected', code })
+      return
+    }
+    if (caller === undefined) {
+      this.audit({ type: 'request.rejected', code })
+      return
+    }
+    this.audit({
+      type: 'request.rejected',
+      requestId: caller.requestId,
+      tenantId: caller.tenantId,
+      userRef: caller.userRef,
+      code,
+    })
   }
 
   private sendJson(res: NilmHttpResponse, status: number, value: JsonValue): void {

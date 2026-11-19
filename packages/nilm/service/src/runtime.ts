@@ -37,6 +37,8 @@ export type NilmAgentEvent =
     readonly status: 'completed' | 'failed'
     readonly summary: string
     readonly warnings: readonly string[]
+    /** Stable tool failure code when the session recorded one. */
+    readonly code?: string
     readonly meta?: JsonValue
   }
   | { readonly type: 'turn-end'; readonly reason: string }
@@ -262,6 +264,7 @@ class RuntimeSession implements NilmAgentSession {
           status: event.data.message.isError === true ? 'failed' : 'completed',
           summary: bound(textOf(event.data.message.content), 4000),
           warnings: warningsOf(event.data.meta),
+          ...(event.data.error === undefined ? {} : { code: event.data.error.code }),
           ...(event.data.meta === undefined ? {} : { meta: event.data.meta }),
         })
         break

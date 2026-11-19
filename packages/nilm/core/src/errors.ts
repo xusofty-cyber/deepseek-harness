@@ -44,3 +44,16 @@ export class NilmToolError extends NilmError {}
 
 /** Failure raised by the read-only source adapter or its query guard. */
 export class NilmSourceError extends NilmError {}
+
+/**
+ * Failure codes that indicate an authorization or argument-boundary violation.
+ * Shared by the tool wrapper and the BFF so both audit the same classes.
+ */
+export const SECURITY_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
+  'INVALID_ARGS',
+  'SCOPE_FORBIDDEN',
+  'UNAUTHORIZED_TENANT',
+  'TENANT_CONTEXT_UNAVAILABLE',
+  'TOOL_CONTEXT_UNAVAILABLE',
+  'UNAUTHORIZED_SQL_OPERATION',
+])

@@ -4,7 +4,7 @@
  */
 
 import { Service, type Context } from '@deepseek-ai/cordis'
-import { NilmSourceError } from '@deepseek-ai/dsh-nilm-core'
+import { NilmSourceError, redactValue } from '@deepseek-ai/dsh-nilm-core'
 import { Config } from './config.ts'
 import { ColdProxyClient, HttpColdProxyTransport, type ColdProxyTransport } from './cold-proxy.ts'
 import { MysqlExecutor, sourceUnavailable, type SqlExecutor } from './mysql.ts'
@@ -34,6 +34,16 @@ export type { SqlTransaction, SqlTransactionRunner } from './transaction.ts'
 export { HttpTdengineExecutor } from './tdengine.ts'
 export type { TdengineExecutor } from './tdengine.ts'
 
+/** One read-only guard rejection; the original SQL never reaches the audit record. */
+export interface SourceSecurityAuditEvent {
+  /** Stable event class. */
+  readonly type: 'sql.rejected'
+  /** Guarded source that refused the statement. */
+  readonly source: 'local' | 'upstream'
+  /** Stable refusal code. */
+  readonly code: 'UNAUTHORIZED_SQL_OPERATION'
+}
+
 /** Injectable transports used by tests and by alternate deployment drivers. */
 export interface SourceDependencies {
   /** Project MySQL executor. */
@@ -48,6 +58,8 @@ export interface SourceDependencies {
   tdengineStats?: TdengineExecutor
   /** Cold-proxy transport. */
   coldProxyTransport?: ColdProxyTransport
+  /** Security audit sink; absent writes a redacted warning through the plugin logger. */
+  securityAudit?: (event: SourceSecurityAuditEvent) => void
 }
 
 /** One named connectivity assertion. */
@@ -89,6 +101,7 @@ export class NilmSourceService extends Service {
   private readonly hot: TdengineExecutor
   private readonly stats: TdengineExecutor
   private readonly cold: ColdProxyClient
+  private readonly audit: (event: SourceSecurityAuditEvent) => void
   private readonly owned: SqlExecutor[]
   private readonly ownedTransactions: SqlTransactionRunner[]
   private closed = false
@@ -124,6 +137,9 @@ export class NilmSourceService extends Service {
       dependencies.coldProxyTransport ?? new HttpColdProxyTransport(config.coldProxyUrl),
       config.coldProxyTimeoutMs,
     )
+    this.audit = dependencies.securityAudit ?? (event => {
+      ctx.logger.warn(`nilm.security ${JSON.stringify(redactValue(event))}`)
+    })
     this.owned = owned
     this.ownedTransactions = ownedTransactions
     ctx.effect(() => () => this.close())
@@ -137,7 +153,7 @@ export class NilmSourceService extends Service {
    * @returns result rows.
    */
   async queryLocalReadOnly<T>(sql: string, params: readonly unknown[] = [], signal?: AbortSignal): Promise<T[]> {
-    return this.run('local', this.local, assertReadOnlySql(sql, [...NILM_LOCAL_TABLES, INFORMATION_SCHEMA_TABLES]), params, signal)
+    return this.run('local', this.local, this.guard('local', sql, [...NILM_LOCAL_TABLES, INFORMATION_SCHEMA_TABLES]), params, signal)
   }
 
   /**
@@ -160,7 +176,7 @@ export class NilmSourceService extends Service {
    * @returns result rows.
    */
   async queryUpstreamReadOnly<T>(sql: string, params: readonly unknown[] = [], signal?: AbortSignal): Promise<T[]> {
-    return this.run('upstream', this.upstream, assertReadOnlySql(sql, NILM_UPSTREAM_TABLES), params, signal)
+    return this.run('upstream', this.upstream, this.guard('upstream', sql, NILM_UPSTREAM_TABLES), params, signal)
   }
 
   /**
@@ -274,6 +290,18 @@ export class NilmSourceService extends Service {
       ...this.owned.map(executor => executor.close()),
       ...this.ownedTransactions.map(runner => runner.close()),
     ])
+  }
+
+  /** Apply the SELECT-only guard and audit every refusal before the driver sees SQL. */
+  private guard(source: 'local' | 'upstream', sql: string, allowedTables: readonly string[]): string {
+    try {
+      return assertReadOnlySql(sql, allowedTables)
+    } catch (error) {
+      if (error instanceof NilmSourceError && error.code === 'UNAUTHORIZED_SQL_OPERATION') {
+        this.audit({ type: 'sql.rejected', source, code: 'UNAUTHORIZED_SQL_OPERATION' })
+      }
+      throw error
+    }
   }
 
   private async run<T>(

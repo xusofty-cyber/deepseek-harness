@@ -85,6 +85,14 @@ Tool 轮次只按观测到的 `tool.start` 分类；提示要求分析但未产�
 
 `pnpm test:perf:load --self-check --output /tmp/perf-self-check.json` 在内存会话存储与合成 Agent 上启动真实 BFF，覆盖签名、HTTP、SSE、轮次调度与隔离探测，不接触模型、数据库或集群。其报告标记为 `self-check`，不包含 G4-3 门禁，且 `evidence` 字段声明它不是 G4-3 证据。自检不能替代目标报告。
 
+## 安全测试
+
+`pnpm test:security:pentest` 执行版本化 `4.4.1` 攻击语料。32 个用例覆盖四层：伪造或重放的 BFF 信封与跨租户读取、SELECT-only SQL 守卫、模型提供的 Tool 参数（未声明的权限字段以 `INVALID_ARGS` 拒绝），以及不可变 `CallContext`。
+
+认证失败写 `auth.rejected`；其余拒绝写 `request.rejected`，仅在身份校验已通过时携带已认证租户。携带 `INVALID_ARGS`、`SCOPE_FORBIDDEN` 或租户上下文不可用的 Tool 失败写 `tool.rejected`；SQL 守卫在驱动接触语句前写 `sql.rejected`。审计记录不包含请求体、模型提示词、手机号、OpenID、签名或 Token。插件日志消息经过 `redactText`，结构化审计值经过 `redactValue`，将中国大陆手机号掩码为 `138****0000`，并掩码带标签或裸 OpenID、Bearer 凭证、API Key 与 `v1=` 签名。套件断言每个声明用例都已执行，删除或改名用例会使测试失败。
+
+离线证据止于拦截与审计写入。它不证明生产日志留存、KMS 数据库加密或模型供应商侧处理。Session 按设计保留模型可见的用户问题，因此不能用“原始问题不存在”满足 G4-4；生产评审必须展示 Session 访问控制与加密、受审计的日志汇，以及 `nilm_security_audit` 存储。G4-4 仍需完成该评审并确认无 Critical/High 遗留。
+
 ## 已知限制与延期工作
 
 - 阶段 1 未实现 mTLS，只接受 HMAC 信封。生产接入仍需补齐概要设计要求的 mTLS 路径。
@@ -93,6 +101,7 @@ Tool 轮次只按观测到的 `tool.start` 分类；提示要求分析但未产�
 - 分片数变更与租户迁移属于部署操作。BFF 会拒绝非归属分片上的租户，但从不迁移 Session 文件，也不承诺跨分片漂移恢复。
 - 离线测试覆盖租户目录布局、会话重载、撕裂尾部读取与 Session 写入互斥。真实 StatefulSet SIGKILL 与 PVC 重挂仍需集群演练。
 - 每轮缓冲与幂等记录在进程生命周期内保留；阶段 1 尚未实现淘汰或归档策略。
-- 安全审计当前以结构化文本写入插件日志；`nilm_security_audit` 持久化随审计存储集成交付。
+- 审计记录经进程内脱敏后写入插件日志；`nilm_security_audit` 持久化与生产日志汇留存证据仍待补齐。
 - 告警列表与确认委托给 `nilmSentinel`；该插件未挂载时按设计保持不可用。在签名请求契约接受查询参数前，不提供分页。
 - G4-3 harness 仅有离线测试。尚未产出 100 租户 x 5 会话、30 分钟的目标报告；自检验证的是 harness，不是服务容量。
+- G4-4 攻击语料仅在离线运行。生产日志审查、KMS/AES-GCM 验证、审计存储留存与无 Critical/High 的安全结论仍待完成。

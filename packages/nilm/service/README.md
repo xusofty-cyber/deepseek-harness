@@ -85,6 +85,14 @@ The isolation phase runs after the measurement window. Another tenant reads each
 
 `pnpm test:perf:load --self-check --output /tmp/perf-self-check.json` starts the real BFF against an in-memory conversation store and a synthetic agent. It exercises signing, HTTP, SSE, turn scheduling, and isolation probes without a model, database, or cluster. Its report is labeled `self-check`, omits G4-3 gates, and its `evidence` field states that it is not G4-3 evidence. A self-check cannot substitute for a target report.
 
+## Security testing
+
+`pnpm test:security:pentest` runs the versioned `4.4.1` attack corpus. Its 32 cases exercise four layers: forged or replayed BFF envelopes and cross-tenant reads, the SELECT-only SQL guard, model-supplied tool arguments whose undeclared authority fields are rejected as `INVALID_ARGS`, and the immutable `CallContext`.
+
+An authentication failure emits `auth.rejected`. Every other refusal emits `request.rejected`, carrying the verified tenant only when identity verification already succeeded. A tool failure carrying `INVALID_ARGS`, `SCOPE_FORBIDDEN`, or an unavailable tenant context emits `tool.rejected`; the SQL guard emits `sql.rejected` before a driver sees the statement. Audit records never contain request bodies, model prompts, phone numbers, OpenID values, signatures, or tokens. Plugin log messages pass through `redactText`, and structured audit values through `redactValue`, masking mainland mobile numbers as `138****0000`, labeled or raw OpenID values, bearer credentials, API keys, and `v1=` signatures. The suite asserts that every declared case ran, so deleting or renaming a case fails it.
+
+Offline evidence ends at interception and audit emission. It does not prove production log retention, KMS-backed database encryption, or provider-side model handling. Sessions intentionally retain the model-visible user request, so G4-4 cannot be met by asserting that the raw question is absent; the production review must show Session access control and encryption, an audited log sink, and a `nilm_security_audit` store. G4-4 still requires that review and a no-Critical/no-High finding.
+
 ## Known Limitations and Deferred Work
 
 - mTLS is not implemented in stage 1; only HMAC envelopes are accepted. Production onboarding still needs the mTLS path required by the high-level design.
@@ -93,6 +101,7 @@ The isolation phase runs after the measurement window. Another tenant reads each
 - Shard count changes and tenant migration are deployment operations. The BFF refuses a tenant on a non-owning shard but never migrates Session files, and cross-shard drift recovery is not promised.
 - Offline tests cover tenant directory layout, conversation reload, torn-tail reads, and Session write exclusion. A real StatefulSet SIGKILL and PVC reattach still require a cluster rehearsal.
 - Turn buffers and idempotency entries are retained for the process lifetime; stage 1 has no eviction or archival policy for them.
-- Security audit currently goes to the plugin logger as structured text; `nilm_security_audit` persistence arrives with the audit-store integration.
+- Audit records reach the plugin logger with in-process masking; `nilm_security_audit` persistence and production log-sink retention evidence are still pending.
 - Alert listing and acknowledgement delegate to `nilmSentinel`; they remain unavailable by design when that plugin is not mounted. Pagination is not exposed until the signed-request contract accepts query parameters.
 - The G4-3 harness has offline tests only. No 100-tenant x 5-session, 30-minute target report has been produced; a self-check validates the harness, not service capacity.
+- The G4-4 attack corpus is offline. Production log review, KMS/AES-GCM verification, audit-store retention, and a no-Critical/no-High security finding remain outstanding.

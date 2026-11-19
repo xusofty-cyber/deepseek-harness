@@ -6,6 +6,7 @@
 
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { redactText } from '@deepseek-ai/dsh-nilm-core'
 import type { NotificationChannel } from '@deepseek-ai/dsh-nilm-sentinel'
 import { buildTransports, type ChannelTransport, type FetchLike } from './channels.ts'
 import { CordisDiagnosisAgent } from './diagnosis.ts'
@@ -137,7 +138,7 @@ export class NilmNotifyService extends Service {
       sendTimeoutMs: resolved.channelTimeoutMs,
       retentionDays: resolved.retentionDays,
       now: dependencies.now ?? (() => Date.now()),
-      logger: { warn: message => { ctx.logger.warn(message) } },
+      logger: { warn: message => { ctx.logger.warn(redactText(message)) } },
     })
     const agent = dependencies.diagnosisAgent ?? (resolved.enrichModel === undefined
       ? undefined
@@ -155,7 +156,7 @@ export class NilmNotifyService extends Service {
         timeoutMs: resolved.enrichTimeoutMs,
         concurrency: resolved.enrichConcurrency,
         now: dependencies.now ?? (() => Date.now()),
-        logger: { warn: message => { ctx.logger.warn(message) } },
+        logger: { warn: message => { ctx.logger.warn(redactText(message)) } },
       })
     const off = ctx.on('nilm/alert/created', payload => { this.enrichment?.enqueue(payload) })
     ctx.effect(() => off)

@@ -14,6 +14,8 @@ import {
 } from '@deepseek-ai/dsh-tools'
 import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
+  SECURITY_TOOL_FAILURE_CODES,
+  redactValue,
   type CallContext,
   type ChartSpec,
   type EnergyBucket,
@@ -32,6 +34,16 @@ import type {
   TimeSeriesSample,
 } from '@deepseek-ai/dsh-nilm-analytics'
 import { downsampleBuckets, type AnalysisSample } from '@deepseek-ai/dsh-nilm-timeseries'
+
+/** One tool failure that crossed a security boundary; arguments never appear here. */
+export interface ToolSecurityAuditEvent {
+  /** Stable event class. */
+  readonly type: 'tool.rejected'
+  /** Registered tool name; never model-generated text. */
+  readonly tool: string
+  /** Stable failure code that selected this audit path. */
+  readonly code: string
+}
 
 /** Cordis plugin name. */
 export const name = 'nilm-tools'
@@ -101,6 +113,8 @@ export interface NilmToolHost {
   >
   /** Authorized unsafe-record projection. */
   nilmSafety: Pick<Context['nilmSafety'], 'queryUnsafeRecords'>
+  /** Security audit sink; absent keeps the tool matrix silent in unit compositions. */
+  securityAudit?: (event: ToolSecurityAuditEvent) => void
 }
 
 const RESULT_OUTPUT = {
@@ -153,7 +167,16 @@ function clarifyOf(value: JsonValue): JsonValue {
  * @param ctx - context carrying NILM services and the tool registry.
  */
 export function apply(ctx: Context): void {
-  applyTools(ctx)
+  applyTools({
+    tools: ctx.tools,
+    nilmContext: ctx.nilmContext,
+    nilmAssets: ctx.nilmAssets,
+    nilmTimeseries: ctx.nilmTimeseries,
+    nilmTariff: ctx.nilmTariff,
+    nilmAnalytics: ctx.nilmAnalytics,
+    nilmSafety: ctx.nilmSafety,
+    securityAudit: event => { ctx.logger.warn(`nilm.security ${JSON.stringify(redactValue(event))}`) },
+  })
 }
 
 /**
@@ -162,7 +185,11 @@ export function apply(ctx: Context): void {
  * @param ctx - host carrying the tool registry and NILM services.
  */
 export function applyTools(ctx: NilmToolHost): void {
-  ctx.tools.register(closed(defineTool({
+  const register = (definition: ToolDefinition): void => {
+    ctx.tools.register(audited(closed(definition), ctx.securityAudit))
+  }
+
+  register(defineTool({
     name: 'nilm_scope_resolve',
     description: 'Resolve a factory, workshop, terminal, channel, or appliance name/id/path into authorized scope and a non-overlapping meter set.',
     parameters: {
@@ -205,9 +232,9 @@ export function applyTools(ctx: NilmToolHost): void {
           : {}),
       })
     },
-  })))
+  }))
 
-  ctx.tools.register(closed(defineTool({
+  register(defineTool({
     name: 'nilm_appliance_query',
     description: 'Query NILM-disaggregated appliance running/stopped time and estimated energy for one authorized scope and time range.',
     parameters: {
@@ -308,9 +335,9 @@ export function applyTools(ctx: NilmToolHost): void {
         warnings,
       })
     },
-  })))
+  }))
 
-  ctx.tools.register(closed(defineTool({
+  register(defineTool({
     name: 'nilm_energy_query',
     description: 'Query authorized energy in kWh for one scope and time range, optionally priced by the tenant tariff plan and compared with the previous period or previous year.',
     parameters: {
@@ -398,9 +425,9 @@ export function applyTools(ctx: NilmToolHost): void {
         ...(chart === undefined ? {} : { chart }),
       })
     },
-  })))
+  }))
 
-  ctx.tools.register(closed(defineTool({
+  register(defineTool({
     name: 'nilm_power_quality_query',
     description: 'Calculate energy-weighted power factor, per-order harmonic content, phase unbalance, and voltage deviation for one authorized scope and time range.',
     parameters: {
@@ -494,9 +521,9 @@ export function applyTools(ctx: NilmToolHost): void {
         ...(chart === undefined ? {} : { chart }),
       })
     },
-  })))
+  }))
 
-  ctx.tools.register(closed(defineTool({
+  register(defineTool({
     name: 'nilm_timeseries_analyze',
     description: 'Extract CUSUM step events, inrush and harmonic fingerprints, inferred start-stop cycles, and microscopic hazards from second-level power samples in a window of at most four hours.',
     parameters: {
@@ -619,9 +646,9 @@ export function applyTools(ctx: NilmToolHost): void {
         ...(chart === undefined ? {} : { chart }),
       })
     },
-  })))
+  }))
 
-  ctx.tools.register(closed(defineTool({
+  register(defineTool({
     name: 'nilm_safety_query',
     description: 'Query stored electrical safety events for one authorized scope and time range; missing upstream fields remain null.',
     parameters: {
@@ -671,7 +698,7 @@ export function applyTools(ctx: NilmToolHost): void {
         warnings,
       })
     },
-  })))
+  }))
 }
 
 
@@ -902,8 +929,60 @@ function requireCallContext(ctx: NilmToolHost, agentId: string | undefined): Cal
 }
 
 function closed<T extends ToolDefinition>(tool: T): T {
-  return { ...tool, parameters: { ...tool.parameters, additionalProperties: false } }
+  const declared = declaredProperties(tool.parameters)
+  return {
+    ...tool,
+    parameters: { ...tool.parameters, additionalProperties: false },
+    async execute(args, exec) {
+      const violations = undeclaredArguments(args, declared)
+      if (violations.length > 0) throw new ToolArgsError(violations)
+      return await tool.execute(args, exec)
+    },
+  }
 }
+
+/** Read the declared argument names from one closed tool schema. */
+function declaredProperties(schema: Record<string, unknown>): ReadonlySet<string> {
+  const properties = schema.properties
+  if (typeof properties !== 'object' || properties === null || Array.isArray(properties)) return new Set()
+  return new Set(Object.keys(properties))
+}
+
+/** Report model-supplied arguments that the closed schema does not declare. */
+function undeclaredArguments(args: unknown, declared: ReadonlySet<string>): string[] {
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return []
+  return Object.keys(args)
+    .filter(key => !declared.has(key))
+    .slice(0, 10)
+    .map(key => `"${key}" is not a declared property (additionalProperties: false)`)
+}
+
+/** Read a stable failure code across the tool and NILM error hierarchies. */
+function stableErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error) || !('code' in error)) return undefined
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' ? code : undefined
+}
+
+/** Report authorization and argument-boundary failures without echoing caller input. */
+function audited<T extends ToolDefinition>(tool: T, audit: NilmToolHost['securityAudit']): T {
+  if (audit === undefined) return tool
+  return {
+    ...tool,
+    async execute(args, exec) {
+      try {
+        return await tool.execute(args, exec)
+      } catch (error) {
+        const code = stableErrorCode(error)
+        if (code !== undefined && SECURITY_TOOL_FAILURE_CODES.has(code)) {
+          audit({ type: 'tool.rejected', tool: tool.name, code })
+        }
+        throw error
+      }
+    },
+  }
+}
+
 
 function scopeTarget(value: { level: ScopeLevel; id?: string; name?: string; path?: string }): ScopeTarget {
   if (value.id === undefined && value.name === undefined && value.path === undefined) {

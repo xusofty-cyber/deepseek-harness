@@ -15300,6 +15300,18 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:~
         version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-nilm-assets':
+        specifier: workspace:*
+        version: link:../assets
+      '@deepseek-ai/dsh-nilm-source':
+        specifier: workspace:*
+        version: link:../source
+      '@deepseek-ai/dsh-nilm-tools':
+        specifier: workspace:*
+        version: link:../tools
+      '@deepseek-ai/dsh-tools':
+        specifier: workspace:*
+        version: link:../../core/tools
 
   packages/nilm/sharding: {}
 

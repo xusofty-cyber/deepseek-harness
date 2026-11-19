@@ -39,6 +39,10 @@
     "@deepseek-ai/cordis": "workspace:~"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "workspace:~"
+    "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/dsh-nilm-assets": "workspace:*",
+    "@deepseek-ai/dsh-nilm-source": "workspace:*",
+    "@deepseek-ai/dsh-nilm-tools": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*"
   }
 }

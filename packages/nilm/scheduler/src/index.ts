@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { NilmError, type ChartSpec } from '@deepseek-ai/dsh-nilm-core'
+import { NilmError, redactText, type ChartSpec } from '@deepseek-ai/dsh-nilm-core'
 import { JsonRecipientPolicy, type NotificationChannel, type RecipientPolicy } from '@deepseek-ai/dsh-nilm-sentinel'
 import {
   SourceSchedulerDataSource,
@@ -237,7 +237,7 @@ export class NilmSchedulerService extends Service {
       if (this.running) return
       this.running = true
       void this.runDue()
-        .catch((error: unknown) => { this.ctx.logger.warn(`nilm-scheduler sweep failed: ${errorText(error)}`) })
+        .catch((error: unknown) => { this.ctx.logger.warn(redactText(`nilm-scheduler sweep failed: ${errorText(error)}`)) })
         .finally(() => { this.running = false })
     }
     this.timer = setInterval(tick, this.resolved.tickIntervalMs)
@@ -380,7 +380,7 @@ export class NilmSchedulerService extends Service {
         maximumHotColdDeviation: this.resolved.qualityMaximumHotColdDeviation,
       })
       for (const finding of findings) await this.auditFinding(tenant.tenantId, finding, nowMs)
-      for (const warning of data.warnings) this.ctx.logger.warn(`nilm-scheduler R-08 ${tenant.tenantId}: ${warning}`)
+      for (const warning of data.warnings) this.ctx.logger.warn(redactText(`nilm-scheduler R-08 ${tenant.tenantId}: ${warning}`))
       return { reportInserted: false, notifications: 0, qualityFindings: findings.length }
     })
   }
@@ -417,7 +417,7 @@ export class NilmSchedulerService extends Service {
     } catch (error) {
       const code = errorCode(error)
       await this.repository.failJob(claim.jobRunId, code, nowMs)
-      this.ctx.logger.warn(`nilm-scheduler ${jobType} failed for ${tenant.tenantId}: ${errorText(error)}`)
+      this.ctx.logger.warn(redactText(`nilm-scheduler ${jobType} failed for ${tenant.tenantId}: ${errorText(error)}`))
       return { outcome: outcome('failed', code), reportInserted: false, notifications: 0, qualityFindings: 0 }
     }
   }
@@ -445,7 +445,7 @@ export class NilmSchedulerService extends Service {
       if (expired || text === undefined || text.trim() === '') return input.fallback
       return text
     } catch (error) {
-      this.ctx.logger.warn(`nilm-scheduler summary fallback for ${input.tenantId}: ${errorText(error)}`)
+      this.ctx.logger.warn(redactText(`nilm-scheduler summary fallback for ${input.tenantId}: ${errorText(error)}`))
       return input.fallback
     } finally {
       clearTimeout(timer)
@@ -463,7 +463,7 @@ export class NilmSchedulerService extends Service {
   ): Promise<number> {
     const recipients = await this.recipients.resolve(tenant.tenantId, tenant.notificationPolicy, this.resolved.reportChannels)
     if (recipients.length === 0) {
-      this.ctx.logger.warn(`nilm-scheduler ${reportType} for ${tenant.tenantId} has no configured recipient`)
+      this.ctx.logger.warn(redactText(`nilm-scheduler ${reportType} for ${tenant.tenantId} has no configured recipient`))
       return 0
     }
     const body = JSON.stringify({

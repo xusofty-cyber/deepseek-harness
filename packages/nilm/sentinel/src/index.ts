@@ -7,7 +7,7 @@
 
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { NilmError } from '@deepseek-ai/dsh-nilm-core'
+import { NilmError, redactText } from '@deepseek-ai/dsh-nilm-core'
 import type {} from '@deepseek-ai/dsh-nilm-assets'
 import type {} from '@deepseek-ai/dsh-nilm-timeseries'
 import { isNonProduction, shanghaiIso } from './calendar.ts'
@@ -238,7 +238,7 @@ export class NilmSentinelService extends Service {
       if (this.scanning) return
       this.scanning = true
       void this.scanOnce()
-        .catch((error: unknown) => { this.ctx.logger.warn(`nilm-sentinel scan failed: ${errorText(error)}`) })
+        .catch((error: unknown) => { this.ctx.logger.warn(redactText(`nilm-sentinel scan failed: ${errorText(error)}`)) })
         .finally(() => { this.scanning = false })
     }
     this.timer = setInterval(tick, this.config.pollIntervalMs)
@@ -596,7 +596,7 @@ export class NilmSentinelService extends Service {
     const key = `${tenantId}:${ruleId}:${reason}`
     if (this.missingSignalsLogged.has(key)) return
     this.missingSignalsLogged.add(key)
-    this.ctx.logger.warn(`nilm-sentinel ${ruleId} skipped for tenant ${tenantId}: ${reason}`)
+    this.ctx.logger.warn(redactText(`nilm-sentinel ${ruleId} skipped for tenant ${tenantId}: ${reason}`))
   }
 }
 

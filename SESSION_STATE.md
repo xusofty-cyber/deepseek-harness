@@ -1,41 +1,45 @@
 # Session: 2026-11-19
 
 **Started:** 2026-11-19 (Asia/Shanghai)
-**Last Updated:** 2026-11-19 09:32 CST
+**Last Updated:** 2026-11-19 10:30 CST
 **Project:** `/home/picohood/projects/opensource/deepseek-harness`
-**Topic:** NILM 阶段 4.3：G4-3 百家工厂压测 harness（离线部分）
+**Topic:** NILM 阶段 4.4：版本化安全攻击套件、审计链路与日志脱敏（离线部分）
 
 ---
 
 ## What We Are Building
 
-在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。阶段 1/2/3、4.1 与 4.2 已提交；最新提交 `9efc0e0265` 包含租户分片、PVC 会话索引与 K8s 清单。
+在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。阶段 1/2/3、4.1、4.2、4.3 已提交；最新提交 `b3f2b6ed92` 为 G4-3 压测 harness。
 
-本会话完成 WBS 4.3 的离线实现：新增 `test:perf:load` 压测 harness、G4-3 指标聚合与门禁、签名 HTTP/SSE 客户端、虚拟会话调度、跨租户隔离探测、数据集 manifest 预检，以及真实 BFF + 合成 Agent 的 loopback 自检目标。真实 100 租户 x 5 会话 x 30 分钟压测尚未执行，G4-3 现场证据门仍开放；4.4 安全渗透尚未开始。
+本会话完成 WBS 4.4 的离线实现：新增 `4.4.1` 版本化攻击语料（32 个用例）、BFF 拒绝审计、Tool 安全失败审计、SQL 守卫拒绝审计、统一日志脱敏纯函数，并把 service 测试脚手架提取为共享 harness。G4-4 现场证据门仍开放：生产日志审查、KMS/AES-GCM 存储验证、`nilm_security_audit` 落库与无 Critical/High 的安全结论均未执行。
 
 ---
 
 ## What WORKED (with evidence)
 
-- **压测 harness 已落地** — `packages/nilm/service/scripts/perf-load.ts` 提供 `--self-check` 与真实 `--target` 两种运行；`scripts/perf/{metrics,http,runner,loopback}.ts` 分别负责门禁聚合、签名 HTTP/SSE、负载调度与 loopback 目标。根 `package.json` 已声明 `test:perf:load`。
-- **压测单测** — confirmed by: `packages/nilm/service/tests/perf-load.spec.ts` 15 个用例，14 通过、1 跳过（2026-11-19 09:31 CST）。覆盖最近秩百分位与 20 万样本聚合、manifest 覆盖率预检、门禁通过与失败、场景覆盖、SSE 跨块/注释/心跳解析、签名信封被真实 `verifyRequest` 接受、注入 transport 的调度/工具分类/隔离探测；loopback 用例因沙箱拒绝绑定回环端口以 `EPERM` 跳过。
-- **service 包** — confirmed by: 4 个测试文件，49 通过、1 跳过。4.2 基线的 auth 8、conversations 13、http 14 未回归。
-- **全部 NILM 离线用例** — confirmed by: 42 个测试文件、325 通过、1 跳过（2026-11-19 09:31 CST）。4.2 基线为 41 文件 / 311 通过，本阶段新增 1 文件 / 14 通过。
+- **版本化攻击套件** — `packages/nilm/service/tests/security-pentest.spec.ts` 声明 `PENTEST_SUITE_VERSION = '4.4.1'` 与 32 个攻击用例，末项用例断言清单内每个 id 都被真实执行；命令为 `pnpm test:security:pentest`。confirmed by: 34 通过（32 攻击 + 1 授权基线 + 1 完整性，2026-11-19 10:23 CST）。
+- **四层覆盖** — BFF 信封/重放/伪造租户/双租户读取与列表隔离 17 例；SQL 守卫写语句、多语句、注释、字面量、非白名单表、锁读、SLEEP 8 例；Tool 注入 `tenant_id`/`target_tenant_id`/`allowed_scope` 被闭集 Schema 以 `INVALID_ARGS` 拒绝并审计、缺失上下文、越权 Scope 共 5 例；`CallContext` 冻结与重绑定 2 例。
+- **拒绝审计** — BFF 认证失败写 `auth.rejected`（不记录未认证 Header）；其余拒绝写 `request.rejected`，仅在身份校验已通过时携带租户；Tool 安全失败写 `tool.rejected`；SQL 守卫拒绝写 `sql.rejected`。`packages/nilm/service/src/http.ts` 用 `WeakSet` 避免同一错误重复审计。
+- **脱敏纯函数** — `packages/nilm/core/src/redact.ts` 提供 `redactText`/`redactValue`：手机号掩码为 `138****8000`，OpenID、Bearer/Authorization、API Key、`x-nilm-signature` 与裸 `v1=` 签名替换为 `<redacted>`。confirmed by: `packages/nilm/core/tests/redact.spec.ts` 5 通过。
+- **日志接入** — service、scheduler、sentinel、notify 的 logger 消息经 `redactText`；service 审计序列化经 `redactValue`；source 与 tools 的审计事件只含事件类型、来源/工具名与稳定错误码。
+- **service 测试** — confirmed by: 5 个文件，83 通过、1 跳过（`perf-load` loopback 因沙箱 `EPERM` 跳过）。
+- **全部 NILM 离线用例** — confirmed by: 44 个文件、364 通过、1 跳过（2026-11-19 10:23 CST）。4.3 基线为 42 文件 / 325 通过；本阶段新增 2 文件 / 39 通过。
 - **同分片恢复用例** — confirmed by: `recovery.spec.ts` 1 通过、1 跳过；跳过项仍需要本机未安装的原生 `flock` addon。
-- **类型检查** — confirmed by: 临时 `noEmit` 配置覆盖 `packages/nilm/service/src`、`scripts`（含新压测代码），零错误。临时环境仍缺 `zod`、`vitest` 与 vendor 类型，仓库既有错误不在本包范围；测试文件的 `context` 类型需在正常 `pnpm install` 环境复核。
-- **README 与文档门禁** — confirmed by: translation pairing 1 对一致；limitations 398 个通过；model experience 398 个通过；doc refs 5264 个可解析；doc budgets 7 个在预算内；md links 2648 个通过。
-- **`git diff --check`** — confirmed by: 空白与行尾检查通过；新增文件均以单个换行结尾。
+- **类型检查** — confirmed by: 临时 `noEmit` 配置覆盖全部 `packages/nilm/*/src`，零错误；覆盖 service 测试时仅剩既有 `recovery.spec.ts` 对 `@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts` 的路径解析错误（环境缺工作区依赖），新增/改动文件无错误。
+- **文档门禁** — confirmed by: translation pairing 1 对一致；limitations 398 个通过；model experience 398 个通过；doc refs 5268 个可解析；doc budgets 7 个在预算内；md links 2648 个通过。
+- **`git diff --check`** — confirmed by: 空白与行尾检查通过。
 
 ---
 
 ## What Did NOT Work (and why)
 
-- **真实 G4-3 压测** — 未执行：无目标集群、100 租户签名密钥、90 天分钟级 + 7 天秒级数据集与 30 分钟测量窗口。不得把离线用例或 self-check 当作 G4-3 通过。
-- **CLI `--self-check`** — 未执行：当前沙箱禁止监听回环端口（`EPERM`），且本机缺少可用的 `tsx`/工作区依赖解析。对应 loopback 集成用例被显式跳过；不是产品失败。
+- **G4-4 现场证据门** — 未执行：没有真实双租户安全测试环境、生产日志汇、KMS/AES-GCM 数据库与 `nilm_security_audit` 落库。离线套件不能替代安全负责人签署的无 Critical/High 结论。
+- **生产日志脱敏验证** — 未执行：只验证了进程内纯函数与 logger 包装；未采集生产日志样本证明无手机号/OpenID/Token 明文。
+- **`nilm_security_audit` 持久化** — 未实现：审计仍写插件 logger；表 DDL 已存在，但 BFF 尚未接入审计存储。
+- **模型供应商侧隐私** — 未验证：报告摘要是否只含脱敏指标需在真实模型调用链复核；Session 按“模型可见⟺已记录”保留原始提问，不能用“删除原始提问”满足 G4-4。
 - **`pnpm` 命令** — 未执行：本机 `pnpm` 直接段错误。测试使用 pnpm store 中的 vitest 直接运行；文档门禁用 `node --experimental-transform-types`。
-- **覆盖率门禁** — 未执行：临时环境缺 `@vitest/coverage-v8`。新增强制门禁逻辑有行为用例，但未计入 per-file 100% 覆盖率统计。
-- **`verify-md-wrap`** — 仍报告既有硬换行段落，集中在 phase2/3/4 与 requirements 的既有行；本阶段新增段落未被命中，未擅自修改无关文档。
-- **git 提交** — 未执行：按用户要求由用户管理提交；4.3 改动仍在工作树。
+- **覆盖率门禁** — 未执行：临时环境缺 `@vitest/coverage-v8`；新增逻辑有行为用例，但未计入 per-file 100% 覆盖率统计。
+- **`git commit`** — 未执行：按用户要求由用户管理提交；4.4 改动仍在工作树。
 
 ---
 
@@ -43,74 +47,67 @@
 
 | File | Status | Summary |
 | :--- | :--- | :--- |
-| `packages/nilm/service/scripts/perf/metrics.ts` | Added | 最近秩百分位、延迟汇总、manifest 预检、G4-3 门禁 |
-| `packages/nilm/service/scripts/perf/http.ts` | Added | 签名 HTTP、增量 SSE 解析、`LoadClient` transport 接口 |
-| `packages/nilm/service/scripts/perf/runner.ts` | Added | 三类提示调度、轮次采样、工具调用计数、隔离探测、报告 |
-| `packages/nilm/service/scripts/perf/loopback.ts` | Added | 真实 BFF + 内存会话索引 + 合成 Agent 自检目标 |
-| `packages/nilm/service/scripts/perf-load.ts` | Added | CLI 参数、目标/自检运行、报告输出 |
-| `packages/nilm/service/tests/perf-load.spec.ts` | Added | 15 个离线用例；loopback 在沙箱 EPERM 时跳过 |
-| `package.json` / `tsconfig.host.json` | Modified | 新增 `test:perf:load`；scripts 纳入 host 类型检查 |
-| `packages/nilm/service/README.md` / `.zh.md` / `.i18n.yaml` | Modified | 压测命令、manifest、门禁口径、证据边界；配对已重算 |
-| `docs/nilm-ai-agent-development-plan.md` | Modified | G4-3 行改为“harness 已交付，现场未执行” |
-| `docs/nilm-ai-agent-detailed-design-phase4.md` | Modified | 新增 §6.3 压测执行契约与证据边界 |
-| `SESSION_STATE.md` | Rewritten | 本文件 |
-
-工作树仍有上述 4.3 改动；4.2 已在 `9efc0e0265` 提交。
+| `packages/nilm/service/tests/security-pentest.spec.ts` | Added | `4.4.1` 版本化 32 用例攻击语料与完整性断言 |
+| `packages/nilm/service/tests/support/harness.ts` | Added | Fake 请求/响应/会话/运行时、签名调用与审计捕获 |
+| `packages/nilm/service/tests/http.spec.ts` | Modified | 改用共享 harness，删除重复脚手架 |
+| `packages/nilm/core/src/redact.ts` | Added | `redactText`/`redactValue` 手机号、OpenID、Token、签名脱敏 |
+| `packages/nilm/core/tests/redact.spec.ts` | Added | 5 个脱敏与结构保持用例 |
+| `packages/nilm/service/src/http.ts` | Modified | `auth.rejected`/`request.rejected`/`tool.rejected` 审计；拒绝去重；`TurnRecord.requestId` |
+| `packages/nilm/service/src/runtime.ts` | Modified | Tool 失败事件透传稳定错误码 |
+| `packages/nilm/service/src/index.ts` | Modified | 审计与错误日志经脱敏 |
+| `packages/nilm/tools/src/index.ts` | Modified | Tool 安全失败审计包装；`apply` 显式装配 host |
+| `packages/nilm/source/src/index.ts` | Modified | SQL 守卫拒绝审计 `sql.rejected` |
+| `packages/nilm/scheduler|sentinel|notify/src/index.ts` | Modified | logger 消息经 `redactText` |
+| `package.json` | Modified | 新增 `test:security:pentest` |
+| `pnpm-lock.yaml` | Modified | 同步 service devDeps 与 tools 的 `dsh-error` 依赖 |
+| `packages/nilm/service/README.md/.zh.md/.i18n.yaml` | Modified | Security testing 章节、证据边界与限制，配对已重算 |
+| `docs/nilm-ai-agent-development-plan.md` | Modified | G4-4 方法与状态改为“离线已交付，现场未执行” |
+| `docs/nilm-ai-agent-detailed-design-phase4.md` | Modified | §7.2 脱敏实现、§7.3 攻击套件与审计证据、§8 G4-4 行 |
 
 ---
 
-## Decisions Made
+## Architecture Decisions
 
-- **门禁阈值固定** — 首流 p95 < 300ms；无 Tool 首字 p95 < 1500ms；含 Tool 端到端 p95 < 8000ms、p99 < 12000ms；HTTP 5xx 与轮次错误率 < 0.5%。
-- **首流口径从 `POST /v1/turns` 发起计时** — reason: 包含建轮开销，比纯 SSE TTFB 更保守；`ping` 心跳不计入首流。
-- **Tool 分类只认观测到的 `tool.start`** — reason: 不信任提示词意图；同时报告请求的 Tool 提示数与实际 `tool.start` 次数，区分“模型未调用”与“未要求调用”。
-- **三类场景必须覆盖** — reason: 任务书要求无 Tool、单 Tool、多 Tool 三类；默认 30% Tool 提示均分到两小类，每类至少 20 个实测轮次。
-- **样本不足 20 视为 `insufficient`** — reason: 不允许用小样本宣称百分位达标；`insufficient` 永远不算通过。
-- **测量窗口按实际耗时判定** — reason: 防止配置 30 分钟但会话提前全部失败时仍通过窗口门禁。
-- **隔离探测每个声明租户至少 2 次** — reason: 攻击租户读取受害会话必须返回 401/403/404，列表不得包含受害会话 id；探测覆盖不足即失败。
-- **数据集不足直接拒绝运行** — manifest 必须声明 ≥100 租户、90 天分钟级、7 天秒级、每租户 5 个计量点；`--tenants-file` 时 `tenantIds` 必须覆盖全部实际 id。
-- **签名客户端复用 `src/auth.ts`** — reason: 不另造协议；`canonicalRequest` 与 `createSignature` 和 BFF 验签同源。
-- **self-check 明确不是 G4-3 证据** — 报告标记 `self-check`、不生成门禁，`evidence` 字段声明仅验证 harness。
+- **攻击语料与测试同源** — 版本号、用例清单与执行断言在同一 spec 中，避免文档清单与代码漂移；末项用例强制检查 100% 执行。
+- **BFF 认证失败不记录未认证租户** — `AuthError` 只写稳定 `code`；防止攻击者伪造 Header 污染审计。其余拒绝在身份校验已通过时才写租户与用户引用。
+- **Tool 审计在包装层做** — 闭集 Schema 未声明的参数在 Tool 体内执行前以 `INVALID_ARGS` 拒绝；只记录工具名与稳定错误码，不记录模型参数或结果摘要；SQL 审计只记录来源与拒绝码，不记录原始 SQL。
+- **脱敏放在 core 纯函数** — service/scheduler/sentinel/notify/source/tools 共用，不修改 vendored Cordis logger；`redactValue` 保留 JSON 结构。
+- **Session 原始提问保留** — 遵守“模型可见⟺已记录”；G4-4 的生产证据改为访问控制、加密与审计留存评审，而不是删除 Session 内容。
+- **共享 harness** — service 测试的 Fake 组件集中到 `tests/support/harness.ts`，新攻击套件与既有 HTTP 用例复用同一签名/路由行为。
 
 ---
 
 ## Blockers & Open Questions
 
-- G4-3 现场证据门未通过：真实 100 x 5 x 30 分钟压测、QPS/p50/p95/p99、错误率与隔离探测均未在目标环境采集。
-- 现场运行前必须先完成 `deploy/k8s/README.md` 的 G4-2 恢复演练；G4-2 本身仍未在真实集群演练。
-- 数据集与 100 个租户密钥由现场提供；仓库不生成、不保存任何真实密钥。
-- `--self-check` 在禁止监听回环端口的沙箱中无法运行；需在允许本地端口绑定的主机执行。
-- 多 Tool 提示只保证“被请求”，不保证目标模型实际产生 ≥2 次 `tool.start`；现场报告需结合 `toolCalls` 与 `toolObservedTurns` 判读模型行为。
+- G4-4 现场门未通过：需真实双租户环境复验 32 个攻击用例，并采集生产日志、审计存储与数据库密文证据。
+- `nilm_security_audit` 持久化未接入；当前审计只在插件 logger 中可见，进程重启后不保留。
+- 生产日志汇的保留、轮转、访问控制与脱敏验证由运维/安全团队完成；仓库不能提供该证据。
+- KMS/Secret 注入与 AES-GCM 密文存储需部署环境验证；仓库只有接收方密文字段与 DDL。
+- 报告摘要上送模型的字段范围需在真实调用链复核，避免工厂名称、精确位置等进入提示词。
 - `nilm-edge` 网关仍归平台团队；仓库只提供端点载体与路由契约。
 
 ---
 
 ## Exact Next Step
 
-1. 在可写 `.git` 的正常终端提交 4.3：
+1. 在可写 `.git` 的正常终端提交 4.4：
 
 ```sh
 cd /home/picohood/projects/opensource/deepseek-harness
-git add package.json tsconfig.host.json packages/nilm/service/scripts packages/nilm/service/tests/perf-load.spec.ts packages/nilm/service/README.md packages/nilm/service/README.zh.md packages/nilm/service/README.i18n.yaml docs/nilm-ai-agent-development-plan.md docs/nilm-ai-agent-detailed-design-phase4.md SESSION_STATE.md
-git commit -m "feat(nilm): add G4-3 load-test harness"
+git add package.json pnpm-lock.yaml packages/nilm/core packages/nilm/service packages/nilm/tools packages/nilm/source packages/nilm/scheduler packages/nilm/sentinel packages/nilm/notify docs/nilm-ai-agent-development-plan.md docs/nilm-ai-agent-detailed-design-phase4.md SESSION_STATE.md
+git commit -m "feat(nilm): add G4-4 security pentest and log redaction"
 ```
 
-2. 现场执行 G4-3（必须在 G4-2 演练之后）：
+2. 本地复跑离线证据：
 
 ```sh
-NILM_LOAD_SIGNING_SECRETS=/secure/load-secrets.json \
-pnpm test:perf:load \
-  --target https://nilm.example.com \
-  --manifest load-dataset.json \
-  --tenants-file tenants.json \
-  --output g4-3-report.json
+pnpm test:security:pentest
+pnpm run test
 ```
 
-保存报告、manifest、租户清单、准确命令与时间戳。报告 `ok: true` 且所有 gate 为 `pass` 才可声称 G4-3 通过。
+3. 在真实双租户安全环境复验攻击套件，并归档命令、时间戳、日志样本与审计表查询结果；任何用例未拦截或未写审计都不得声称 G4-4 通过。
 
-3. 本地可运行自检的主机上补 `pnpm test:perf:load --self-check --output /tmp/perf-self-check.json`；它只能证明 harness 链路，不是 G4-3 证据。
-
-4. 然后进入 WBS 4.4 安全渗透与脱敏审计；不得用 4.3 离线结果替代 G4-3 现场门，也不得用模型拒答充当隔离证据。
+4. 完成生产日志审查、KMS/AES-GCM 验证与 `nilm_security_audit` 落库后，由安全负责人签署无 Critical/High 结论；随后再进入阶段 4 全量交付验收。
 
 ---
 
@@ -125,11 +122,11 @@ node "$V" run --config /tmp/vitest.nilm.config.mjs packages/nilm/service/tests
 node "$V" run --config /tmp/vitest.recovery.config.mjs
 ```
 
-- 类型检查（临时配置 `/tmp/tsconfig.nilm-load.json` 覆盖 service src/scripts）：
+- 类型检查（临时配置 `/tmp/tsconfig.nilm-44-src.json` 覆盖全部 NILM src）：
 
 ```sh
 D=$(ls -d ~/.local/share/pnpm/store/v11/links/@/typescript/5.9.3/*/node_modules/typescript/bin/tsc | head -1)
-node "$D" -p /tmp/tsconfig.nilm-load.json 2>&1 | grep -E "packages/nilm/service/(src|scripts)"
+node "$D" -p /tmp/tsconfig.nilm-44-src.json 2>&1 | grep -E "packages/nilm/"
 ```
 
 - 文档门禁：

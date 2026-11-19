@@ -23,6 +23,9 @@
 /deepseek-ai-dsh-nilm-service/load-testing:
   en: 92e1c0227b2cbe79
   zh: ec9104fa44eb3537
+/deepseek-ai-dsh-nilm-service/security-testing:
+  en: 7e56f1cd0f9dc5c2
+  zh: b8e79367eaadfa03
 /deepseek-ai-dsh-nilm-service/known-limitations-and-deferred-work:
-  en: 45d24e6727763c0c
-  zh: 0a619bd294ff5d3f
+  en: aeb77fc372af31c7
+  zh: a5c0e168608a8e33

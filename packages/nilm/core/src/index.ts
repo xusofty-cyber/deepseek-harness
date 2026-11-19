@@ -29,5 +29,6 @@ export type {
   TelemetryPoint,
   TimeRangeSpec,
 } from './types.ts'
-export { NilmError, NilmSourceError, NilmToolError } from './errors.ts'
+export { NilmError, NilmSourceError, NilmToolError, SECURITY_TOOL_FAILURE_CODES } from './errors.ts'
 export type { NilmErrorCode } from './errors.ts'
+export { REDACTED, redactText, redactValue } from './redact.ts'

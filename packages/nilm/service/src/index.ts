@@ -7,6 +7,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { AlertPage } from '@deepseek-ai/dsh-nilm-sentinel'
+import { redactText, redactValue } from '@deepseek-ai/dsh-nilm-core'
 import { Config, resolveConfig, type Config as NilmServiceConfig } from './config.ts'
 import { FileConversationStore, MemoryConversationStore } from './conversations.ts'
 import { NilmHttpService, type AlertListPage } from './http.ts'
@@ -92,9 +93,9 @@ export function apply(ctx: Context, config: NilmServiceConfig): void {
       && ctx.get('nilmSafety') !== undefined
       && ctx.get('agents') !== undefined
       && ctx.get('sessions') !== undefined,
-    audit: event => { ctx.logger.warn(`nilm.security ${JSON.stringify(event)}`) },
+    audit: event => { ctx.logger.warn(`nilm.security ${JSON.stringify(redactValue(event))}`) },
     reportBackgroundFailure: (operation, error) => {
-      ctx.logger.error(`${operation} failed: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger.error(redactText(`${operation} failed: ${error instanceof Error ? error.message : String(error)}`))
     },
     ...(sentinel === undefined ? {} : {
       alerts: {
@@ -105,8 +106,8 @@ export function apply(ctx: Context, config: NilmServiceConfig): void {
   })
   ctx.effect(() => {
     void service.start().then(
-      address => { ctx.logger.info(`nilm-service listening on ${address.address}:${String(address.port)}`) },
-      error => { ctx.logger.error(`nilm-service failed to listen: ${String(error)}`) },
+      address => { ctx.logger.info(redactText(`nilm-service listening on ${address.address}:${String(address.port)}`)) },
+      error => { ctx.logger.error(redactText(`nilm-service failed to listen: ${String(error)}`)) },
     )
     return async () => { await service.close() }
   }, 'nilm-service.http')

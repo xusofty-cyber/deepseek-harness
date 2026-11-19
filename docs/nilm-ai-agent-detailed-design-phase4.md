@@ -267,9 +267,16 @@ flowchart TD
 
 ### 7.2 敏感数据脱敏与存储安全
 
-- **日志脱敏**：所有控制台与文件日志输出中，手机号（掩码处理为 `138****0000`）、OpenID、Authorization Token 必须通过正则中间件自动脱敏；
+- **日志脱敏**：所有控制台与文件日志输出中，手机号（掩码处理为 `138****0000`）、OpenID、Authorization Token 必须通过正则中间件自动脱敏。当前由 `@deepseek-ai/dsh-nilm-core` 的 `redactText`/`redactValue` 在 NILM 插件日志与审计序列化前执行，覆盖手机号、带标签或裸 OpenID、Bearer、API Key 与 `v1=` 签名；
 - **模型提问隐私**：上送大模型进行摘要总结的提示词中，仅包含脱敏后的指标统计数据（如“总用电 12000 度”），严禁上送工厂名称、企业税号、员工个人身份及精确地理位置；
 - **凭证零泄露**：生产部署配置文件必须通过 K8s Secret 或环境变量注入，严禁任何代码库明文提交。
+
+### 7.3 攻击套件与审计证据
+
+- **版本化语料**：`packages/nilm/service/tests/security-pentest.spec.ts` 声明 `4.4.1` 版本与 32 个用例清单，末项用例断言清单内每个 id 都被真实执行；命令为 `pnpm test:security:pentest`。
+- **四层拦截**：BFF 信封与双租户隔离用例验证 `401/403/404` 与租户归属；SQL 守卫用例在假驱动调用数为 0 的前提下拒绝写语句、多语句、注释、字面量、锁读与非白名单表；Tool 用例验证注入的 `tenant_id`/`target_tenant_id`/`allowed_scope` 被闭集 Schema 以 `INVALID_ARGS` 拒绝并写 `tool.rejected`，且业务服务调用数为 0；上下文用例验证冻结与重绑定语义。
+- **审计写入**：认证失败写 `auth.rejected`（不记录未认证 Header）；其余拒绝写 `request.rejected`，仅在身份校验已通过时携带租户；Tool 安全失败写 `tool.rejected`；SQL 守卫拒绝写 `sql.rejected`。审计载荷不含请求体、提示词、手机号、OpenID、Token 或签名。
+- **证据边界**：离线套件证明拦截与审计事件产生，不证明生产日志汇留存、KMS 密钥注入或数据库密文落盘；Session 按“模型可见⟺已记录”保留原始提问，G4-4 需以访问控制、加密与审计留存评审而非“原始提问不存在”结案。
 
 ---
 
@@ -280,4 +287,4 @@ flowchart TD
 | **G4-1** | 每日晨报准时送达率 | `pnpm test:scheduler:morning-report` | 20 租户重算 p95 < 500ms，任务状态幂等记录完整，08:35 送达率 100% |
 | **G4-2** | StatefulSet 会话容灾恢复 | 模拟 Pod SIGKILL 与 PVC 重挂载 | 异常半行安全截断，已确认 Session 消息 100% 可重读并顺利续接 |
 | **G4-3** | 百家工厂并发性能达标 | `pnpm test:perf:load`（harness 已交付，现场未执行） | 100 租户 x 5 会话持续 30 分钟；首流 p95 < 300ms，无 Tool 首字 p95 < 1.5s，含 Tool 端到端 p95 < 8s、p99 < 12s，5xx 与轮次错误率 < 0.5%，传输失败 0，租户串扰 0 |
-| **G4-4** | 安全渗透与越权防护 | 安全漏洞演练测试套件 | 伪造 Header 与越权攻击拦截率 100%，日志中无任何敏感明文泄露 |
+| **G4-4** | 安全渗透与越权防护 | `pnpm test:security:pentest`（离线 harness 已交付，现场未执行） | 32 个攻击用例 100% 拦截并写审计；审计/运行日志无手机号、OpenID、Token 明文；生产日志留存、KMS/AES-GCM 存储与无 Critical/High 结论仍需现场评审 |
