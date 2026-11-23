@@ -5,9 +5,9 @@ import { NILM_LOCAL_TABLES } from '../src/index.ts'
 const ddl = readFileSync(new URL('../sql/init-nilm-system.sql', import.meta.url), 'utf8')
 
 describe('init-nilm-system.sql', () => {
-  it('creates exactly the eighteen design tables', () => {
+  it('creates exactly the nineteen design tables', () => {
     const tables = [...ddl.matchAll(/CREATE TABLE `([^`]+)`/g)].map(match => match[1])
-    expect(tables).toHaveLength(18)
+    expect(tables).toHaveLength(19)
     expect(new Set(tables)).toEqual(new Set(NILM_LOCAL_TABLES))
   })
 
@@ -18,5 +18,6 @@ describe('init-nilm-system.sql', () => {
     expect(ddl).toContain('uk_tenant_notification_user_channel')
     expect(ddl).toContain('uk_tenant_dedupe_user_channel')
     expect(ddl).toContain('uk_tenant_plan_period')
+    expect(ddl).toContain('uk_source_tenant')
   })
 })

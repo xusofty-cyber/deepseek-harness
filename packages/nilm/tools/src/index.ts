@@ -407,8 +407,7 @@ export function applyTools(ctx: NilmToolHost): void {
         ? undefined
         : await compareEnergy(ctx, callContext, resolution.meterSet, range, args.compare, includeCost, exec.signal)
       const dataQuality = energy.dataQuality
-      const partialEnergy = energy.warnings.some(warning =>
-        warning.includes('energy rows were capped') || warning.includes('daily statistics rows were capped'))
+      const partialEnergy = dataQuality.truncated === true
       const facts = {
         scope: resolution.matched[0],
         range: dateRange(range),

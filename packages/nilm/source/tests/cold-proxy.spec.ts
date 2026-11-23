@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NilmSourceError } from '@deepseek-ai/dsh-nilm-core'
-import { ColdProxyClient, type ColdProxyTransport } from '../src/index.ts'
+import { ColdProxyClient, HttpColdProxyTransport, type ColdProxyTransport } from '../src/index.ts'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('ColdProxyClient', () => {
   it('sends the fixed template and bound parameters', async () => {
@@ -48,5 +52,23 @@ describe('ColdProxyClient', () => {
       code: 'COLD_LINK_UNAVAILABLE',
       message: 'cold proxy request was cancelled',
     })
+  })
+
+  it('refuses an oversized proxy response without buffering it', async () => {
+    const fetch = vi.fn(() => Promise.resolve(new Response('{'.repeat(8 * 1024 * 1024 + 1), { status: 200 })))
+    vi.stubGlobal('fetch', fetch)
+    const client = new ColdProxyClient(new HttpColdProxyTransport('https://cold.test/query'), 1_000)
+
+    await expect(client.query('health_check', {})).rejects.toMatchObject({
+      code: 'COLD_LINK_UNAVAILABLE',
+      message: 'cold proxy response exceeds the configured size limit',
+    })
+    expect((fetch.mock.calls[0]?.[1] as RequestInit).redirect).toBe('manual')
+  })
+
+  it('rejects a proxy base URL that is not an absolute HTTP endpoint', async () => {
+    const transport = new HttpColdProxyTransport('/relative')
+    await expect(transport.request({ template: 'health_check', params: {} }, AbortSignal.timeout(100)))
+      .rejects.toThrow('cold proxy URL must be an absolute http(s) URL')
   })
 })

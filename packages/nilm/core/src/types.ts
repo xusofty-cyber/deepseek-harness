@@ -123,6 +123,8 @@ export interface NilmDataQuality {
   source: 'preaggregated' | 'raw' | 'cold' | 'mixed'
   /** Parent/child or disaggregation warnings. */
   warnings: string[]
+  /** True when a query cap returned only part of the requested window. */
+  truncated?: boolean
 }
 
 /** Stable chart protocol rendered by the caller's client, not an ECharts option. */

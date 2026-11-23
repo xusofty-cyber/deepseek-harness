@@ -42,6 +42,10 @@ export async function startLoopback(tenantIds: readonly string[]): Promise<Loopb
     signingSecrets: secrets,
     turnTimeoutMs: 10_000,
     pingIntervalMs: 500,
+    // The self-check drives many short turns per caller; it must not trip the
+    // production per-user or tenant concurrency limits under test.
+    rateLimitPerUserPerMinute: 10_000,
+    rateLimitTenantConcurrency: 1_000,
   })
   const service = new NilmHttpService({
     config,
@@ -73,6 +77,11 @@ class SyntheticRuntime implements NilmAgentRuntime {
   /** @inheritDoc */
   async history(sessionId: string, _callContext: CallContext, _mode: TurnMode): Promise<readonly ChatMessage[] | undefined> {
     return this.sessions.get(sessionId)?.messages()
+  }
+
+  /** @inheritDoc */
+  async release(sessionId: string): Promise<void> {
+    this.sessions.delete(sessionId)
   }
 }
 

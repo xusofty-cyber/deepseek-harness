@@ -117,11 +117,11 @@ declare module '@deepseek-ai/cordis' {
 | :--- | :--- | :--- | :--- | :--- |
 | `nilm-edge` | Deployment/Ingress | 2+ | 无状态 | TLS、WAF、限流、路由；不解析业务身份 |
 | `nilm-agent` | StatefulSet（按租户分片） | 每分片 1 主 | PVC（Session JSONL） | dsh runtime、`nilm-service` BFF、Tool、领域服务 |
-| `nilm-sentinel` | Deployment | 1 Leader + 备用 | DB/Redis 规则状态 | 5 秒增量巡检、告警去重与入队 |
+| `nilm-sentinel` | Deployment | 仅 shard 0 扫描 | DB 规则状态 | 5 秒增量巡检、告警去重与入队；不依赖 Redis 选主 |
 | `nilm-scheduler` | Deployment | 1+（数据库幂等） | DB 任务状态 | 08:30 晨报、20/25 日力调预测、数据质量巡检 |
 | `nilm-notifier` | Deployment | 2+ | 无状态 | 从 Outbox 领取任务，按渠道限流 |
 | `nilm-cold-proxy` | 内网 Deployment | 2 | 无状态 | 只读、限查询、mTLS，隔离冷库 |
-| Redis | 托管/集群 | 3 | 有状态 | 限流、nonce、租约、短 TTL 缓存 |
+| Redis | 托管/集群（未接入） | 3 | 有状态 | 目标形态用于跨副本限流、nonce、租约与短 TTL 缓存；当前实现为 BFF 进程内状态 |
 | 本项目 MySQL | 托管 | 主备 | 有状态 | 租户配置、告警、Outbox、报告与审计 |
 
 上游 MySQL、TDengine 热库与冷库不是本项目部署单元，只作为只读依赖。Agent 不能做成无状态 Serverless：Session 持久化、模型长连接、工具上下文与租户分片都需要稳定的进程所有权。
@@ -177,6 +177,7 @@ dsh Session 采用单写者所有权，横向扩展必须显式处理：
 | :--- | :--- | :--- |
 | `nilm_tenant_config` | 租户运行策略、工作日历、基线与通知策略 | 必需 |
 | `nilm_asset_snapshot` | 上游五级拓扑的可重建投影 | 必需 |
+| `nilm_source_tenant_map` | 上游 `source_id`/`source_tenant_id` 到本项目租户的唯一映射 | 必需；上游无 `tenant_id` 时 |
 | `nilm_measurement_binding` | 终端/通道计量角色与父子关系，防重复聚合 | 按需；上游无法表达时启用 |
 | `nilm_conversation` | 会话索引、`session_id -> shard_id` | 必需 |
 | `nilm_turn_log` | 轮次审计、幂等与延迟 | 必需 |
@@ -186,7 +187,7 @@ dsh Session 采用单写者所有权，横向扩展必须显式处理：
 | `nilm_alert_transition` | 告警状态流转审计 | 必需 |
 | `nilm_notification_outbox` | 可靠投递队列 | 必需 |
 | `nilm_notification_record` | 渠道投递审计（需求中的 `log_notification_record`） | 必需 |
-| `nilm_sentinel_watermark` | 上游增量读取水位线 `(source, record_time, record_id)` | 必需 |
+| `nilm_sentinel_watermark` | 上游增量读取水位线 `(source, record_time, record_id, scan_offset)` | 必需 |
 | `nilm_job_run` | 定时任务执行与幂等 | 必需 |
 | `nilm_report` | 晨报/力调报告的结构化结果 | 必需 |
 | `nilm_tariff_plan` / `nilm_tariff_period` | 电价方案与分时时段 | 必需 |
@@ -338,7 +339,8 @@ CREATE TABLE `nilm_alert_event` (
 CREATE TABLE `nilm_sentinel_watermark` (
   `source_name` VARCHAR(64) NOT NULL COMMENT '增量源标识，如 upstream_unsafe',
   `record_time` DATETIME NOT NULL COMMENT '已处理记录的事件时间',
-  `record_id` VARCHAR(128) NOT NULL COMMENT '同一事件时间内的稳定排序ID',
+  `record_id` VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '同一事件时间内的稳定排序ID；二进制排序，水位单调比较按字节序',
+  `scan_offset` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '水位线之后已检查的无效时间行数（毒记录前缀），重启续扫用',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`source_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上游增量读取水位线';
@@ -932,7 +934,7 @@ export function registerTimeseriesAnalyzeTool(ctx: Context): void {
 | `X-Nilm-Allowed-Scope` | 否 | base64url(JSON) 的范围上限；缺省视为租户级并审计 |
 | `X-Nilm-Request-Id` | 是 | 请求唯一 ID；用于追踪与幂等 |
 | `X-Nilm-Timestamp` | 是 | Unix 毫秒；允许 ±300 秒 |
-| `X-Nilm-Nonce` | 是 | 一次性随机串；Redis 保存 10 分钟防重放 |
+| `X-Nilm-Nonce` | 是 | 一次性随机串；当前 BFF 进程内保存 10 分钟防重放，多副本前必须替换为 Redis |
 | `X-Nilm-Signature` | 是 | `v1=<hex(hmac_sha256(secret, canonical))>` |
 
 ```text
@@ -1031,6 +1033,8 @@ SSE 规则：
 
 - **mTLS 未实现**：阶段 1 只接受 HMAC 信封；生产接入前补齐 mTLS 或由网关提供等价的双向认证。
 - **nonce 为单进程内存**：多副本部署时各副本的 nonce 缓存不共享，必须替换为 Redis 才能满足全局防重放。
+- **限流为 BFF 进程内固定窗口**：每用户每分钟 10 次与租户并发 20 的上限在每个 BFF 实例内独立计算，超限返回 `429` 与 `Retry-After`；多副本全局配额仍需 Redis 或 edge 限流。
+- **Turn、Session 与对话缓存有界**：完成的 Turn 在 TTL、全局条数与字节上限后淘汰，并保留轻量幂等 receipt；空闲 Session 在 TTL 后调用 runtime `release()`，维护定时器会兜底清扫；对话缓存超过上限时淘汰最久未用记录，持久化记录仍可从 PVC 索引重载。
 - **会话元数据在配置 PVC 后持久化**：配置 `NILM_SESSIONS_ROOT` 后，Session JSONL 与 `<sessionsRoot>/<tenant>/.nilm/conversations/` 索引可在同分片重启后恢复；未配置时退回单进程内存。MySQL `nilm_conversation` 尚未接入，分片迁移与跨分片漂移恢复不由 BFF 承担。
 - **审计为尽力写入**：BFF 安全审计同时写脱敏结构化日志与 `nilm_security_audit`；写入经有界异步队列，队列满或事务失败会记录丢弃数量，尚无重试与 Outbox。已绑定 `CallContext` 的 Tool 拒绝共享该 sink 落库；SQL 守卫原始 `sql.rejected` 仍只写结构化日志。
 - **告警空骨架保留为降级路径**：阶段 3 的 Sentinel 已挂载时，`GET /v1/alerts` 返回 `available: true` 与按调用方过滤的告警；只有 Sentinel 未挂载时才返回 `available: false`，确认接口则返回 `DATA_UNAVAILABLE`，不伪造告警数据。
@@ -1048,7 +1052,7 @@ SSE 规则：
 | 实时安全 | 上游 `nilm_unsafe_record` 增量/CDC | 5 秒轮询或事件 | 入库到触达 p95 < 30 秒 | 只做异步诊断，不阻塞投递 |
 | 用能分析 | 热库功率、NILM 设备状态、工作日历 | 5 秒实时窗口 + 1~5 分钟聚合 | 阶跃或持续偏离发现后 1 分钟内生成告警 | 只做异步解释，不决定级别 |
 
-实时安全链路使用水位线 `(record_time, record_id)` 读取新增记录；若上游缺少可用索引，阶段 0 由 DBA 评估增加 `(asset_id, record_time, record_id)`。`tenant_id` 是否直存尚未确认，检测器先用租户到资产的映射过滤；只有 DDL 确认存在该列时才加 `tenant_id` 条件。后续接入 Debezium/Kafka CDC 时只替换事件源，不改变检测器接口。
+实时安全链路使用水位线 `(record_time, record_id)` 读取新增记录；若上游缺少可用索引，阶段 0 由 DBA 评估增加 `(asset_id, record_time, record_id)`。上游 `nilm_unsafe_record` 未直存可用 `tenant_id`，检测器先通过 `nilm_source_tenant_map(source_id, source_tenant_id, tenant_id)` 解析唯一本项目租户，再按该租户查询资产所有权；映射缺失或同一 node 映射到多个租户时拒绝处理并记录拒绝原因，禁止跨租户 fan-out。后续接入 Debezium/Kafka CDC 时只替换事件源，不改变检测器接口。
 
 ```mermaid
 sequenceDiagram
@@ -1179,7 +1183,7 @@ Agent 只做“解释与建议”，不决定是否告警：Sentinel 事务提�
 | `INVALID_ARGUMENT` | 参数缺失、格式错误或请求体含 `tenant_id` | `400` | 说明字段错误，不进入 Agent |
 | `INTERNAL_ERROR` | 未分类内部异常 | `500` | 返回通用错误与 `requestId`，详情写审计 |
 
-降级顺序：优先保证告警与通知链路，其次保证确定性查询，最后才是模型润色。模型失败不阻塞告警；冷库失败只报已覆盖段；Redis 不可用时本地限流兜底，选主任务暂停，避免双发。
+降级顺序：优先保证告警与通知链路，其次保证确定性查询，最后才是模型润色。模型失败不阻塞告警；冷库失败只报已覆盖段。Redis 尚未接入，当前限流与 nonce 防重放由 BFF 进程内状态提供；多副本同时服务同一租户前必须接入共享状态，Sentinel 当前只由 shard 0 扫描。
 
 ---
 

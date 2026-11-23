@@ -126,6 +126,18 @@ interface TurnRecord {
   messageHadDelta: boolean
   hadError: boolean
   finished: boolean
+  finishedAt?: number
+  readonly releaseTenant: () => void
+}
+
+/** Small idempotent replay handle retained after a finished turn buffer is evicted. */
+interface TurnReceipt {
+  readonly turnId: string
+  readonly conversationId: string
+  readonly sessionId: string
+  readonly tenantId: TenantId
+  readonly userRef: string
+  readonly expiresAt: number
 }
 
 /** Request payload accepted by `POST /v1/turns`. */
@@ -143,7 +155,18 @@ const MESSAGES_PATH = /^\/v1\/conversations\/([A-Za-z0-9_-]+)\/messages$/
 const ACK_PATH = /^\/v1\/alerts\/([A-Za-z0-9_-]+)\/ack$/
 const MAX_EVENT_BYTES = 64 * 1024
 const MAX_TEXT_CHARS = 20_000
+const MAX_CLIENT_MESSAGE_ID_CHARS = 64
 const IDEMPOTENCY_TTL_MS = 86_400_000
+
+/** Stable rate-limit failure carrying the delay the caller should honor. */
+class RateLimitError extends NilmError {
+  readonly retryAfterSeconds: number
+
+  constructor(message: string, retryAfterSeconds: number) {
+    super('RATE_LIMITED', message)
+    this.retryAfterSeconds = Math.max(1, Math.ceil(retryAfterSeconds))
+  }
+}
 
 type IdempotencyEntry =
   | { readonly status: 'pending'; readonly expiresAt: number }
@@ -159,11 +182,16 @@ export class NilmHttpService {
   private readonly store: ConversationStore
   private readonly tenantLoads = new Map<string, Promise<void>>()
   private readonly turns = new Map<string, TurnRecord>()
+  private readonly turnReceipts = new Map<string, TurnReceipt>()
   private readonly idempotency = new Map<string, IdempotencyEntry>()
+  private readonly userRate = new Map<string, { windowStart: number; count: number }>()
+  private readonly tenantTurns = new Map<string, number>()
   private readonly pendingConversations = new Set<string>()
   private readonly streams = new Set<NilmHttpResponse>()
   private readonly pendingWrites = new Set<Promise<void>>()
   private readonly auditedFailures = new WeakSet<object>()
+  private readonly sessionReleaseTimers = new Map<string, NodeJS.Timeout>()
+  private readonly maintenanceTimer: NodeJS.Timeout
   private closing = false
   private listening = false
 
@@ -176,6 +204,8 @@ export class NilmHttpService {
     this.audit = options.audit ?? (() => undefined)
     this.store = options.conversations ?? new MemoryConversationStore()
     this.server = createServer((req, res) => { void this.handleRequest(req, res) })
+    this.maintenanceTimer = setInterval(() => { this.pruneCaches(this.now()) }, this.options.config.maintenanceIntervalMs)
+    this.maintenanceTimer.unref()
   }
 
   /**
@@ -197,13 +227,26 @@ export class NilmHttpService {
   /** Stop accepting connections and close active streams. */
   async close(): Promise<void> {
     this.closing = true
+    clearInterval(this.maintenanceTimer)
+    for (const timer of this.sessionReleaseTimers.values()) clearTimeout(timer)
+    this.sessionReleaseTimers.clear()
     for (const stream of this.streams) stream.end()
     this.streams.clear()
     for (const turn of this.turns.values()) {
       clearTimeout(turn.timeout)
       turn.unsubscribe()
       turn.buffer.finish()
+      turn.releaseTenant()
     }
+    await Promise.allSettled(
+      [...this.conversations.values()].map(conversation => this.options.runtime.release(conversation.sessionId)),
+    )
+    this.turns.clear()
+    this.turnReceipts.clear()
+    this.idempotency.clear()
+    this.userRate.clear()
+    this.tenantTurns.clear()
+    this.conversations.clear()
     if (this.listening) {
       this.listening = false
       await new Promise<void>((resolve, reject) => {
@@ -257,12 +300,13 @@ export class NilmHttpService {
       return
     }
     const body = req.method === 'POST' ? await readBody(req, this.options.config.maxBodyBytes) : Buffer.alloc(0)
+    const nowMs = this.now()
     const caller = verifyRequest({
       method: req.method ?? 'GET',
       path,
       headers: req.headers,
       body,
-      nowMs: this.now(),
+      nowMs,
       secrets: this.options.config.signingSecrets,
       nonces: this.nonces,
       clockSkewMs: this.options.config.clockSkewMs,
@@ -270,6 +314,7 @@ export class NilmHttpService {
     })
     state.caller = caller
     this.assertShardOwnership(caller)
+    this.checkUserRate(caller, nowMs)
     if (caller.allowedScope === undefined) this.auditSecurity(caller, 'scope-defaulted-tenant-wide')
     if (path === '/v1/conversations' && req.method === 'POST') {
       await this.createConversation(caller, body, res)
@@ -350,14 +395,14 @@ export class NilmHttpService {
       lastText: '',
     }
     await this.store.put(toStored(conversation))
-    this.conversations.set(id, conversation)
+    this.rememberConversation(conversation)
     this.sendJson(res, 201, { conversationId: id, sessionId: id, createdAt: new Date(now).toISOString() })
   }
 
   private async listConversations(caller: VerifiedCaller, res: NilmHttpResponse): Promise<void> {
-    await this.ensureTenantLoaded(caller.tenantId)
-    const rows = [...this.conversations.values()]
-      .filter(item => item.tenantId === caller.tenantId && item.userRef === caller.userRef)
+    const stored = await this.store.list(caller.tenantId, caller.userRef)
+    const rows = stored
+      .map(record => this.conversations.get(record.id) ?? fromStored(record))
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .map(item => ({
         conversationId: item.id,
@@ -374,11 +419,13 @@ export class NilmHttpService {
     const parsed = parseTurnBody(body)
     if (parsed.ignoredTenantId) this.auditSecurity(caller, 'body-tenant-ignored')
     const now = this.now()
-    this.pruneIdempotency(now)
     const idempotencyKey = `${caller.tenantId}\n${caller.userRef}\n${parsed.clientMessageId}`
-    const previous = this.idempotency.get(idempotencyKey)
+    const previous = this.idempotencyAt(idempotencyKey, now)
     if (previous?.status === 'pending') {
-      throw new NilmError('RATE_LIMITED', 'clientMessageId is already being processed; retry after the current request completes')
+      throw new RateLimitError(
+        'clientMessageId is already being processed; retry after the current request completes',
+        1,
+      )
     }
     if (previous?.status === 'complete') {
       const previousTurn = this.turns.get(previous.turnId)
@@ -389,11 +436,22 @@ export class NilmHttpService {
         this.sendAccepted(res, previousTurn, true)
         return
       }
-      this.idempotency.delete(idempotencyKey)
+      const receipt = this.turnReceipts.get(previous.turnId)
+      if (receipt !== undefined) {
+        if (receipt.tenantId !== caller.tenantId || receipt.userRef !== caller.userRef) {
+          throw new NilmError('SCOPE_FORBIDDEN', 'clientMessageId belongs to another caller')
+        }
+        this.sendAcceptedReceipt(res, receipt)
+        return
+      }
+      this.deleteIdempotency(idempotencyKey)
     }
     this.idempotency.set(idempotencyKey, { status: 'pending', expiresAt: now + IDEMPOTENCY_TTL_MS })
     let conversation: ConversationRecord | undefined
+    let releaseTenant: (() => void) | undefined
+    let turnCreated = false
     try {
+      releaseTenant = this.reserveTenantTurn(caller.tenantId)
       conversation = parsed.conversationId === undefined
         ? await this.newConversation(caller)
         : await this.conversationFor(caller, parsed.conversationId)
@@ -409,7 +467,7 @@ export class NilmHttpService {
         ...(caller.allowedScope === undefined ? {} : { allowedScope: caller.allowedScope }),
       }, parsed.mode)
       const turnId = `turn_${randomBytes(12).toString('hex')}`
-      const buffer = new TurnEventBuffer(turnId, conversation.sessionId)
+      const buffer = new TurnEventBuffer(turnId, conversation.sessionId, this.options.config.maxTurnBufferBytes)
       let turn!: TurnRecord
       const timeout = setTimeout(() => {
         if (turn.finished) return
@@ -439,11 +497,18 @@ export class NilmHttpService {
         messageHadDelta: false,
         hadError: false,
         finished: false,
+        releaseTenant,
       }
       this.turns.set(turnId, turn)
+      turnCreated = true
       conversation.agent = agent
       conversation.activeTurnId = turnId
       conversation.updatedAt = now
+      const idleTimer = this.sessionReleaseTimers.get(conversation.id)
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer)
+        this.sessionReleaseTimers.delete(conversation.id)
+      }
       this.append(turn, 'status', { turnId, phase: 'accepted', message: '已受理' })
       try {
         agent.send(parsed.content)
@@ -461,19 +526,36 @@ export class NilmHttpService {
       this.idempotency.set(idempotencyKey, { status: 'complete', turnId, expiresAt: now + IDEMPOTENCY_TTL_MS })
       this.sendAccepted(res, turn, false)
     } finally {
+      if (!turnCreated) releaseTenant?.()
       if (conversation !== undefined) this.pendingConversations.delete(conversation.id)
       const entry = this.idempotency.get(idempotencyKey)
       if (entry?.status === 'pending') this.idempotency.delete(idempotencyKey)
     }
+    this.pruneTurns(now)
+    this.enforceIdempotencyLimit()
   }
 
   private sendAccepted(res: NilmHttpResponse, turn: TurnRecord, idempotent: boolean): void {
     const sessionId = this.conversations.get(turn.conversationId)?.sessionId ?? turn.conversationId
+    this.sendAcceptedValues(res, turn.id, sessionId, turn.conversationId, idempotent)
+  }
+
+  private sendAcceptedReceipt(res: NilmHttpResponse, receipt: TurnReceipt): void {
+    this.sendAcceptedValues(res, receipt.turnId, receipt.sessionId, receipt.conversationId, true)
+  }
+
+  private sendAcceptedValues(
+    res: NilmHttpResponse,
+    turnId: string,
+    sessionId: string,
+    conversationId: string,
+    idempotent: boolean,
+  ): void {
     this.sendJson(res, 202, {
-      turnId: turn.id,
+      turnId,
       sessionId,
-      conversationId: turn.conversationId,
-      streamUrl: `/v1/turns/${turn.id}/stream`,
+      conversationId,
+      streamUrl: `/v1/turns/${turnId}/stream`,
       idempotent,
     })
   }
@@ -577,8 +659,10 @@ export class NilmHttpService {
   private finalizeTurn(turn: TurnRecord): void {
     if (turn.finished) return
     turn.finished = true
+    turn.finishedAt = this.now()
     clearTimeout(turn.timeout)
     turn.unsubscribe()
+    turn.releaseTenant()
     if (turn.text !== '') this.append(turn, 'text.done', { turnId: turn.id, text: turn.text })
     turn.buffer.finish()
     const conversation = this.conversations.get(turn.conversationId)
@@ -587,6 +671,7 @@ export class NilmHttpService {
       conversation.updatedAt = this.now()
       this.persistConversation(conversation)
     }
+    this.scheduleSessionRelease(turn.conversationId)
   }
 
   /** Write the index change without letting a failed background write break the SSE stream. */
@@ -615,12 +700,9 @@ export class NilmHttpService {
     if (loaded !== undefined) return loaded
     const load = this.store.list(tenantId).then((records) => {
       for (const record of records) {
-        if (!this.conversations.has(record.id)) this.conversations.set(record.id, fromStored(record))
+        if (!this.conversations.has(record.id)) this.rememberConversation(fromStored(record))
       }
-    }, (error: unknown) => {
-      this.tenantLoads.delete(tenantId)
-      throw error
-    })
+    }).finally(() => { this.tenantLoads.delete(tenantId) })
     this.tenantLoads.set(tenantId, load)
     return load
   }
@@ -684,7 +766,7 @@ export class NilmHttpService {
 
   private async listMessages(caller: VerifiedCaller, conversationId: string, res: NilmHttpResponse): Promise<void> {
     const conversation = await this.conversationFor(caller, conversationId)
-    const messages: readonly ChatMessage[] = conversation.agent?.messages()
+      const messages: readonly ChatMessage[] = conversation.agent?.messages()
       ?? await this.options.runtime.history(conversation.sessionId, {
         tenantId: caller.tenantId,
         userRef: caller.userRef,
@@ -693,6 +775,7 @@ export class NilmHttpService {
         ...(caller.allowedScope === undefined ? {} : { allowedScope: caller.allowedScope }),
       }, 'auto')
       ?? []
+    this.scheduleSessionRelease(conversation.id)
     this.sendJson(res, 200, {
       conversationId,
       messages: messages.map(message => ({ id: message.id, role: message.role, text: message.text })),
@@ -713,13 +796,17 @@ export class NilmHttpService {
       lastText: '',
     }
     await this.store.put(toStored(conversation))
-    this.conversations.set(id, conversation)
+    this.rememberConversation(conversation)
     return conversation
   }
 
   private async conversationFor(caller: VerifiedCaller, id: string): Promise<ConversationRecord> {
     await this.ensureTenantLoaded(caller.tenantId)
-    const conversation = this.conversations.get(id)
+    let conversation = this.conversations.get(id)
+    if (conversation === undefined) {
+      const stored = await this.store.get(caller.tenantId, id)
+      if (stored !== undefined) conversation = this.rememberConversation(fromStored(stored))
+    }
     if (conversation === undefined) throw new NilmError('SCOPE_NOT_FOUND', 'conversation not found')
     if (conversation.tenantId !== caller.tenantId || conversation.userRef !== caller.userRef) {
       throw new NilmError('SCOPE_FORBIDDEN', 'conversation belongs to another caller')
@@ -739,7 +826,7 @@ export class NilmHttpService {
   private append(turn: TurnRecord, event: Parameters<TurnEventBuffer['append']>[0], data: JsonValue): boolean {
     const size = Buffer.byteLength(JSON.stringify(data), 'utf8')
     if (size > MAX_EVENT_BYTES) return false
-    return turn.buffer.append(event, data) !== undefined
+    return turn.buffer.append(event, data, size) !== undefined
   }
 
   private appendText(turn: TurnRecord, text: string): void {
@@ -748,9 +835,187 @@ export class NilmHttpService {
     }
   }
 
+  private checkUserRate(caller: VerifiedCaller, now: number): void {
+    const key = `${caller.tenantId}\n${caller.userRef}`
+    const windowMs = this.options.config.rateLimitWindowMs
+    const limit = this.options.config.rateLimitPerUserPerMinute
+    const current = this.userRate.get(key)
+    if (current === undefined || now - current.windowStart >= windowMs) {
+      this.userRate.set(key, { windowStart: now, count: 1 })
+      return
+    }
+    if (current.count >= limit) {
+      throw new RateLimitError(
+        'request rate exceeded for this user',
+        (current.windowStart + windowMs - now) / 1_000,
+      )
+    }
+    current.count += 1
+  }
+
+  private reserveTenantTurn(tenantId: TenantId): () => void {
+    const active = this.tenantTurns.get(tenantId) ?? 0
+    if (active >= this.options.config.rateLimitTenantConcurrency) {
+      throw new RateLimitError('concurrent turn limit exceeded for this tenant', 1)
+    }
+    this.tenantTurns.set(tenantId, active + 1)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const remaining = (this.tenantTurns.get(tenantId) ?? 1) - 1
+      if (remaining <= 0) this.tenantTurns.delete(tenantId)
+      else this.tenantTurns.set(tenantId, remaining)
+    }
+  }
+
+  private scheduleSessionRelease(conversationId: string): void {
+    const existing = this.sessionReleaseTimers.get(conversationId)
+    if (existing !== undefined) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      this.sessionReleaseTimers.delete(conversationId)
+      void this.releaseIdleConversation(conversationId).catch((error: unknown) => {
+        this.options.reportBackgroundFailure?.('session.release', error)
+      })
+    }, this.options.config.sessionIdleTtlMs)
+    timer.unref()
+    this.sessionReleaseTimers.set(conversationId, timer)
+  }
+
+  private async releaseIdleConversation(conversationId: string): Promise<void> {
+    const conversation = this.conversations.get(conversationId)
+    if (conversation === undefined) return
+    if (conversation.activeTurnId !== undefined || this.pendingConversations.has(conversationId)) return
+    if (this.now() - conversation.updatedAt < this.options.config.sessionIdleTtlMs) {
+      this.scheduleSessionRelease(conversationId)
+      return
+    }
+    delete conversation.agent
+    await this.options.runtime.release(conversation.sessionId)
+  }
+
+  private rememberConversation(conversation: ConversationRecord): ConversationRecord {
+    this.conversations.set(conversation.id, conversation)
+    this.evictConversations()
+    return conversation
+  }
+
+  private evictConversations(): void {
+    if (this.conversations.size <= this.options.config.conversationCacheSize) return
+    const candidates = [...this.conversations.values()]
+      .filter(item => item.activeTurnId === undefined && !this.pendingConversations.has(item.id))
+      .sort((left, right) => left.updatedAt - right.updatedAt)
+    for (const conversation of candidates) {
+      if (this.conversations.size <= this.options.config.conversationCacheSize) break
+      const timer = this.sessionReleaseTimers.get(conversation.id)
+      if (timer !== undefined) clearTimeout(timer)
+      this.sessionReleaseTimers.delete(conversation.id)
+      this.conversations.delete(conversation.id)
+      delete conversation.agent
+      void this.options.runtime.release(conversation.sessionId).catch((error: unknown) => {
+        this.options.reportBackgroundFailure?.('session.release', error)
+      })
+    }
+  }
+
+  private pruneCaches(now: number): void {
+    for (const [key, entry] of this.userRate) {
+      if (now - entry.windowStart >= this.options.config.rateLimitWindowMs) this.userRate.delete(key)
+    }
+    for (const [tenantId, active] of this.tenantTurns) {
+      if (active <= 0) this.tenantTurns.delete(tenantId)
+    }
+    this.pruneTurns(now)
+    this.pruneIdempotency(now)
+    this.pruneTurnReceipts(now)
+    this.releaseStaleSessions(now)
+    this.evictConversations()
+  }
+
+  /** Release live agents whose conversations have been idle past the TTL. */
+  private releaseStaleSessions(now: number): void {
+    for (const [conversationId, conversation] of this.conversations) {
+      if (conversation.agent === undefined) continue
+      if (conversation.activeTurnId !== undefined || this.pendingConversations.has(conversationId)) continue
+      if (now - conversation.updatedAt < this.options.config.sessionIdleTtlMs) continue
+      const timer = this.sessionReleaseTimers.get(conversationId)
+      if (timer !== undefined) clearTimeout(timer)
+      this.sessionReleaseTimers.delete(conversationId)
+      delete conversation.agent
+      void this.options.runtime.release(conversation.sessionId).catch((error: unknown) => {
+        this.options.reportBackgroundFailure?.('session.release', error)
+      })
+    }
+  }
+
+  private pruneTurns(now: number): void {
+    const finished = [...this.turns.values()]
+      .filter(turn => turn.finished)
+      .sort((left, right) => (left.finishedAt ?? left.createdAt) - (right.finishedAt ?? right.createdAt))
+    let count = finished.length
+    let bytes = finished.reduce((total, turn) => total + turn.buffer.bufferedBytes, 0)
+    for (const turn of finished) {
+      const finishedAt = turn.finishedAt ?? turn.createdAt
+      const expired = now - finishedAt >= this.options.config.turnRetentionMs
+      if (!expired && count <= this.options.config.maxRetainedTurns
+        && bytes <= this.options.config.maxRetainedTurnBytes) continue
+      this.evictTurn(turn)
+      count -= 1
+      bytes -= turn.buffer.bufferedBytes
+    }
+  }
+
+  private evictTurn(turn: TurnRecord): void {
+    this.turns.delete(turn.id)
+    let expiresAt: number | undefined
+    for (const entry of this.idempotency.values()) {
+      if (entry.status !== 'complete' || entry.turnId !== turn.id) continue
+      expiresAt = Math.max(expiresAt ?? 0, entry.expiresAt)
+    }
+    if (expiresAt === undefined) return
+    this.turnReceipts.set(turn.id, {
+      turnId: turn.id,
+      conversationId: turn.conversationId,
+      sessionId: this.conversations.get(turn.conversationId)?.sessionId ?? turn.conversationId,
+      tenantId: turn.tenantId,
+      userRef: turn.userRef,
+      expiresAt,
+    })
+  }
+
+  private idempotencyAt(key: string, now: number): IdempotencyEntry | undefined {
+    const entry = this.idempotency.get(key)
+    if (entry === undefined) return undefined
+    if (entry.expiresAt > now) return entry
+    this.deleteIdempotency(key)
+    return undefined
+  }
+
+  private deleteIdempotency(key: string): void {
+    const entry = this.idempotency.get(key)
+    if (entry === undefined) return
+    this.idempotency.delete(key)
+    if (entry.status === 'complete') this.turnReceipts.delete(entry.turnId)
+  }
+
+  private enforceIdempotencyLimit(): void {
+    if (this.idempotency.size <= this.options.config.maxIdempotencyEntries) return
+    for (const [key, entry] of this.idempotency) {
+      if (entry.status === 'pending') continue
+      this.deleteIdempotency(key)
+      if (this.idempotency.size <= this.options.config.maxIdempotencyEntries) return
+    }
+  }
+
   private pruneIdempotency(now: number): void {
     for (const [key, entry] of this.idempotency) {
-      if (entry.expiresAt <= now) this.idempotency.delete(key)
+      if (entry.expiresAt <= now) this.deleteIdempotency(key)
+    }
+  }
+
+  private pruneTurnReceipts(now: number): void {
+    for (const [turnId, receipt] of this.turnReceipts) {
+      if (receipt.expiresAt <= now) this.turnReceipts.delete(turnId)
     }
   }
 
@@ -794,7 +1059,12 @@ export class NilmHttpService {
       ? error.message
       : 'internal service failure'
     this.auditFailure(error, code, caller)
-    this.sendJson(res, status, { code, message, requestId: 'unavailable' })
+    this.sendJson(
+      res,
+      status,
+      { code, message, requestId: 'unavailable' },
+      error instanceof RateLimitError ? { 'retry-after': String(error.retryAfterSeconds) } : {},
+    )
   }
 
   /**
@@ -824,12 +1094,18 @@ export class NilmHttpService {
     })
   }
 
-  private sendJson(res: NilmHttpResponse, status: number, value: JsonValue): void {
+  private sendJson(
+    res: NilmHttpResponse,
+    status: number,
+    value: JsonValue,
+    extraHeaders: OutgoingHttpHeaders = {},
+  ): void {
     if (closureClosed(res)) return
     const body = JSON.stringify(value)
     res.writeHead(status, {
       'content-type': 'application/json; charset=utf-8',
       'content-length': Buffer.byteLength(body),
+      ...extraHeaders,
     })
     res.end(body)
   }
@@ -873,8 +1149,12 @@ function parseTurnBody(body: Buffer): TurnBody {
     throw new NilmError('INVALID_ARGUMENT', 'conversationId is malformed')
   }
   const clientMessageId = record.clientMessageId
-  if (typeof clientMessageId !== 'string' || clientMessageId.trim() === '' || clientMessageId.length > 128) {
-    throw new NilmError('INVALID_ARGUMENT', 'clientMessageId must be a non-empty string of at most 128 characters')
+  if (typeof clientMessageId !== 'string' || clientMessageId.trim() === ''
+    || clientMessageId.length > MAX_CLIENT_MESSAGE_ID_CHARS) {
+    throw new NilmError(
+      'INVALID_ARGUMENT',
+      `clientMessageId must be a non-empty string of at most ${String(MAX_CLIENT_MESSAGE_ID_CHARS)} characters`,
+    )
   }
   const content = record.content
   if (typeof content !== 'string' || content.trim() === '' || content.length > MAX_TEXT_CHARS) {

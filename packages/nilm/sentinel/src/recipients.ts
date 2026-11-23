@@ -126,7 +126,8 @@ function decodeBase64(text: string, tenantId: string): Uint8Array {
  */
 function parseJson(text: string, tenantId: string): unknown {
   try {
-    return JSON.parse(text) as unknown
+    const value: unknown = JSON.parse(text)
+    return value
   } catch (error) {
     throw new NilmError('INVALID_ARGUMENT', `tenant ${tenantId} notification policy is not valid JSON`, { cause: error })
   }

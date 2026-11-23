@@ -258,9 +258,9 @@ export class SourceSchedulerDataSource implements SchedulerDataSource {
     const rows = await this.dependencies.source.queryLocalReadOnly<{ nodeId: string; nodeName: string }>(
       `SELECT node_id AS nodeId, node_name AS nodeName
          FROM nilm_asset_snapshot
-        WHERE tenant_id = ? AND level = 'workshop' AND is_active = 1
+        WHERE tenant_id = ? AND level = ? AND is_active = 1
         ORDER BY node_id`,
-      [caller.tenantId],
+      [caller.tenantId, 'workshop'],
     )
     const workshops: WorkshopEnergy[] = []
     for (const workshop of rows) {

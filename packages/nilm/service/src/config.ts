@@ -48,6 +48,28 @@ export interface Config {
   auditQueueSize?: number
   /** Maximum security-audit rows written in one transaction. */
   auditBatchSize?: number
+  /** How long a finished turn remains replayable in process memory. */
+  turnRetentionMs?: number
+  /** Maximum finished turns retained for replay across all callers. */
+  maxRetainedTurns?: number
+  /** Maximum aggregate replay bytes retained across finished turns. */
+  maxRetainedTurnBytes?: number
+  /** Maximum bytes buffered for one turn's SSE replay. */
+  maxTurnBufferBytes?: number
+  /** Idle time before a live agent session is released from memory. */
+  sessionIdleTtlMs?: number
+  /** Maximum conversation index entries cached in process. */
+  conversationCacheSize?: number
+  /** Maximum clientMessageId idempotency entries retained. */
+  maxIdempotencyEntries?: number
+  /** Periodic cache and rate-window maintenance interval. */
+  maintenanceIntervalMs?: number
+  /** Per-user request allowance inside one rate window. */
+  rateLimitPerUserPerMinute?: number
+  /** Maximum concurrent active turns per tenant. */
+  rateLimitTenantConcurrency?: number
+  /** Rate window width. */
+  rateLimitWindowMs?: number
 }
 
 /** Loader schema with deployment-safe defaults. */
@@ -69,6 +91,17 @@ export const Config: z<Config> = z.object({
   pingIntervalMs: z.natural().min(1).default(15_000),
   auditQueueSize: z.natural().min(1).default(1_024),
   auditBatchSize: z.natural().min(1).default(64),
+  turnRetentionMs: z.natural().min(1).default(600_000),
+  maxRetainedTurns: z.natural().min(1).default(1_024),
+  maxRetainedTurnBytes: z.natural().min(64 * 1024).default(64 * 1024 * 1024),
+  maxTurnBufferBytes: z.natural().min(64 * 1024).default(8 * 1024 * 1024),
+  sessionIdleTtlMs: z.natural().min(1).default(900_000),
+  conversationCacheSize: z.natural().min(1).default(4_096),
+  maxIdempotencyEntries: z.natural().min(1).default(10_000),
+  maintenanceIntervalMs: z.natural().min(1_000).default(60_000),
+  rateLimitPerUserPerMinute: z.natural().min(1).default(10),
+  rateLimitTenantConcurrency: z.natural().min(1).default(20),
+  rateLimitWindowMs: z.natural().min(1_000).default(60_000),
 })
 
 /** Configuration after defaults have been applied. */
@@ -89,6 +122,17 @@ export interface ResolvedConfig {
   pingIntervalMs: number
   auditQueueSize: number
   auditBatchSize: number
+  turnRetentionMs: number
+  maxRetainedTurns: number
+  maxRetainedTurnBytes: number
+  maxTurnBufferBytes: number
+  sessionIdleTtlMs: number
+  conversationCacheSize: number
+  maxIdempotencyEntries: number
+  maintenanceIntervalMs: number
+  rateLimitPerUserPerMinute: number
+  rateLimitTenantConcurrency: number
+  rateLimitWindowMs: number
 }
 
 /**
@@ -134,5 +178,16 @@ export function resolveConfig(config: Config): ResolvedConfig {
     pingIntervalMs: config.pingIntervalMs ?? 15_000,
     auditQueueSize: config.auditQueueSize ?? 1_024,
     auditBatchSize: config.auditBatchSize ?? 64,
+    turnRetentionMs: config.turnRetentionMs ?? 600_000,
+    maxRetainedTurns: config.maxRetainedTurns ?? 1_024,
+    maxRetainedTurnBytes: config.maxRetainedTurnBytes ?? 64 * 1024 * 1024,
+    maxTurnBufferBytes: config.maxTurnBufferBytes ?? 8 * 1024 * 1024,
+    sessionIdleTtlMs: config.sessionIdleTtlMs ?? 900_000,
+    conversationCacheSize: config.conversationCacheSize ?? 4_096,
+    maxIdempotencyEntries: config.maxIdempotencyEntries ?? 10_000,
+    maintenanceIntervalMs: config.maintenanceIntervalMs ?? 60_000,
+    rateLimitPerUserPerMinute: config.rateLimitPerUserPerMinute ?? 10,
+    rateLimitTenantConcurrency: config.rateLimitTenantConcurrency ?? 20,
+    rateLimitWindowMs: config.rateLimitWindowMs ?? 60_000,
   }
 }

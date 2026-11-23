@@ -140,7 +140,7 @@ export class SourceSafetyRepository implements SafetyRepository {
     filter: { terminalIds?: readonly string[]; channelIds?: readonly string[] },
     signal?: AbortSignal,
   ): Promise<UnsafeRow[]> {
-    const params: Array<Date | string> = [new Date(window.startMs), new Date(window.endMs)]
+    const params: Array<Date | string> = [new Date(window.startMs), new Date(window.endMs), '10']
     let clauses = ''
     const terminals = filter.terminalIds ?? []
     const channels = filter.channelIds ?? []
@@ -158,7 +158,7 @@ export class SourceSafetyRepository implements SafetyRepository {
               unsafe_type AS unsafeType, unsafe_desc AS unsafeDesc,
               power, current, appliance_name AS applianceName, handling_status AS handlingStatus
          FROM nilm_unsafe_record
-        WHERE record_time >= ? AND record_time < ? AND unsafe_type <> '10'${clauses}
+        WHERE record_time >= ? AND record_time < ? AND unsafe_type <> ?${clauses}
         ORDER BY record_time DESC
         LIMIT ${String(limit)}`,
       params,

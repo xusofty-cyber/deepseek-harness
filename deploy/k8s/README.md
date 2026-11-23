@@ -40,9 +40,31 @@ Before applying, replace the image tag, the ingress host and TLS secret name, an
 
 When the platform gateway runs outside the `nilm` namespace, add that namespace's selector to both `allow-edge-ingress` and the `nilm-agent` ingress rule. A `podSelector` alone matches only the policy's own namespace, so the default-deny policy otherwise blocks the gateway even though its Endpoints are bound to `nilm-edge`.
 
+## Database accounts
+
+Use a dedicated account for each MySQL endpoint and grant only what the code needs. The application guard rejects non-SELECT SQL on the read paths, but the account grant is the boundary that still holds if the guard is bypassed.
+
+- Upstream business MySQL (`NILM_UPSTREAM_MYSQL_*`): `SELECT` on `nilm_unsafe_record` and `appliance_category` only. No write, DDL, or schema-wide grant.
+- Project MySQL (`NILM_LOCAL_MYSQL_*`): `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the project schema. The write transaction updates alert, notification, watermark, job, report, and audit tables. Do not grant `CREATE`, `ALTER`, `DROP`, `GRANT OPTION`, or global privileges; run `packages/nilm/source/sql/init-nilm-system.sql` with a separate migration account.
+- `information_schema.tables` needs no grant; MySQL shows the rows for tables the account can access, which is what the connectivity probe checks.
+- The TDengine user (`NILM_UPSTREAM_TDENGINE_USER`) should also be limited to reads on the hot and statistics databases.
+
+```sql
+-- Upstream business database: read two tables only.
+CREATE USER 'nilm_upstream_ro'@'10.0.0.%' IDENTIFIED BY '<password>';
+GRANT SELECT ON upstream_db.nilm_unsafe_record TO 'nilm_upstream_ro'@'10.0.0.%';
+GRANT SELECT ON upstream_db.appliance_category TO 'nilm_upstream_ro'@'10.0.0.%';
+
+-- Project database: data reads and writes, no DDL.
+CREATE USER 'nilm_app'@'10.0.0.%' IDENTIFIED BY '<password>';
+GRANT SELECT, INSERT, UPDATE, DELETE ON nilm_db.* TO 'nilm_app'@'10.0.0.%';
+```
+
+Replace `upstream_db`, `nilm_db`, the host pattern (the Pod egress CIDR), and the passwords. Check the result with `SHOW GRANTS FOR 'nilm_upstream_ro'@'10.0.0.%';` before writing the credentials into the private Secret.
+
 ## Shard count and PVC topology
 
-`NILM_SHARD_COUNT` in `configmap.yaml` must equal `spec.replicas` in `statefulset.yaml`. The bundle derives `NILM_SHARD_INDEX` from the trailing ordinal of `NILM_POD_NAME`; a mismatch makes some tenants unroutable or routes them to a Pod that refuses them with `403 SCOPE_FORBIDDEN`.
+`NILM_SHARD_COUNT` in `configmap.yaml` must equal `spec.replicas` in `statefulset.yaml`. The bundle derives `NILM_SHARD_INDEX` from the trailing ordinal of `NILM_POD_NAME`; a mismatch makes some tenants unroutable or routes them to a Pod that refuses them with `403 SCOPE_FORBIDDEN`. Replace `NILM_SOURCE_TENANT_ID` with the upstream tenant key that has a `nilm_source_tenant_map` row before applying the ConfigMap; Sentinel refuses to scan without that mapping.
 
 Each Pod mounts its own `data` volume at `/data`, and the JSONL backend writes under `/data/sessions/<encoded tenant>`. The conversation index sits under `/data/sessions/<encoded tenant>/.nilm/conversations`. Because the volume is ReadWriteOnce, a rescheduled Pod can only start after the volume detaches from the old node.
 

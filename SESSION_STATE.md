@@ -1,178 +1,157 @@
-# Session: 2026-11-19
+# Session: 2026-11-23
 
-**Started:** 2026-11-19 (Asia/Shanghai)
-**Last Updated:** 2026-11-19 16:10 CST
+**Last Updated:** 2026-11-23 18:14 CST
 **Project:** `/home/picohood/projects/opensource/deepseek-harness`
-**Topic:** NILM 测试规约重写与验证矩阵校准（46 套件 / 381 断言）
+**Branch:** `feat/nilm-ai-agent-architecture`
+**Base:** `origin/master` at merge-base `39163dd30f703a79079e2d2446545cff3c453738`
+**Topic:** NILM 全量审查修复、回归验证与独立复审（未提交工作区）
 
----
+## Current State
 
-## What We Are Building
+阶段 0-4 的开发已在分支上完成。第三次独立复审（1 Critical、1 Important、2 Minor）已全部修复；第四次独立复审 `REJECT`（2 Critical、1 Important、3 Minor）的修复已落在工作区：`TABLE`/`VALUES` 查询表达式、生产 SQL 字面量、危险函数/变量、`VALUES()` 弃用、`record_id` 字节序与 `scan_offset` 上限。16:33 CST 重建临时测试配置后，完整 NILM 套件（49 文件、467 用例，含 `recovery.spec.ts`）、tsc 与文档门禁全部通过，测试规格计数已按 Vitest JSON 统一。第五次独立只读复审 `APPROVE`（0 Critical、1 Important、5 Minor）；其中 Important I-1 已在 16:45 CST 修复，完整套件 49 文件、469 用例通过（1 跳过）。第六次独立复审 `REJECT`（0 Critical、2 Important、5 Minor），两条 Important 与 Minor 3/6/7 已在 17:53 CST 修复，完整套件 49 文件、485 用例通过（1 跳过），待第七次复审。以下改动仍在工作区，**未提交、未推送**。
 
-在 dsh harness 上构建独立 NILM 工厂能源 AI Agent 服务。调用方完成用户认证后，用签名信封向 BFF 传入 `tenant_id`、`user_ref`、`allowed_scope`、`request_id`；BFF 只验签并绑定不可变调用上下文。
-阶段 0 至阶段 4 全量功能开发及审查修复（commit `bba0b64c16`）均已完成并推送至 GitHub 私有仓库 `git@github.com:xusofty-cyber/dsh-nilm.git`。
+## Independent Re-review（2026-11-23 14:58 CST）
 
-本轮完成了对全系统测试规约的校准式重写：
-- 重写 `docs/nilm-ai-agent-test-specifications.md`：按实际 Vitest 输出记录 46 个测试文件、381 个断言；用例标题直接来自当前 `it()`，安全套件按 32 个 `PENTEST_CASES` 声明 ID 展示；证据门改为 21 项并区分离线与现场。
-- 保留 `scripts/translation-pairing.manifest.json` 中的非双语排除项；该文档仍无英文配对，属于预期。
-- 生成对话 Artifact：`nilm-ai-agent-test-specifications`。
-- 文档门禁（doc refs, doc budgets, md-links）全部退出 0；translation pairing 仍按 manifest 排除。
+- **Critical（已修复）**：`packages/nilm/source/src/sql-guard.ts` 原 `TABLE_REFERENCE` 正则不识别 `STRAIGHT_JOIN`，`SELECT * FROM nilm_tenant_config STRAIGHT_JOIN secret_table` 可绕过表白名单；修复见下方 Review Remediation。
+- **Important（已修复）**：`packages/nilm/sentinel/src/index.ts:237,302-324` 的 `scanOffset` 原仅存进程内存；毒前缀超过单轮处理量时，频繁滚动重启会反复从头扫描并延迟后续有效记录，与重启续扫承诺不一致。
+- **Minor（已修复）**：`docs/nilm-ai-agent-test-specifications.md:677` 的 G3-1 计数过期；`scanner.spec.ts` 新增重启续扫用例后实际为 `19 + 13 = 32`，已同步。
+- **Minor（已修复）**：`packages/nilm/sentinel/tests/store.spec.ts` 原只断言 SQL 文本片段；现以内存表按 MySQL 左到右赋值语义执行真实 upsert 语句，4 个用例覆盖回退拒绝、同水位偏移只增、前进归零、旧进程偏移不回写；交换赋值顺序的变异会使测试失败。
 
----
+## Review Remediation
 
-## Review Remediation (uncommitted worktree)
+- **毒记录扫描偏移持久化（第三次复审 Important）**：`nilm_sentinel_watermark` 新增 `scan_offset INT UNSIGNED NOT NULL DEFAULT 0`；`Watermark.scanOffset` 可选字段；`loadWatermark()` 读回并把非法值归零；`saveWatermark()` 在同一条 `ON DUPLICATE KEY UPDATE` 中先判定 `scan_offset` 再移动 `(record_time, record_id)`：水位前进时采用新偏移，水位相同时只增不减，旧进程不能回退。`scanOnce()` 每走完一个全毒批次即持久化偏移，有效行推进水位后归零；`ensureWatermark()` 重启时恢复偏移。新增 `scanner.spec.ts` 回归：24 条毒行 + 1 条有效行、批 2 条，首轮停在 offset 20，新实例共享 store 只读剩余 5 行并交付告警。架构/HLD/Sentinel 双语 README 已同步。
+- **SQL 表因子绕过（第三次复审 Critical）**：探针确认正则提取另有三类漏洞：`JOIN (secret_table)` / `JOIN ((secret_table))` 括号表名、`` `a`.`b` `` 只取前段、子查询内 `FROM a, secret_table` 逗号连接。`assertReadOnlySql()` 改为轻量词法切分：`FROM`/`JOIN`/`STRAIGHT_JOIN` 后按 `ident(.ident)*` 读完整限定名；括号表源仅允许 `(SELECT ...)` 派生表（其内表照常校验）；每层括号独立检测逗号连接（覆盖子查询与 `UNION` 分支）；拒绝双引号（ANSI_QUOTES 标识符）、未闭合/转义反引号、括号不配对；标识符字符集含 `$` 与非 ASCII。`sql-guard.spec.ts` 由 10 增至 21 个用例，含 `information_schema.tables` 实际查询放行。
+- **SQL 逗号 JOIN 绕过（Critical）**：`assertReadOnlySql()` 改为在 FROM 子句内按顶层括号深度检测逗号，允许 `IN (?, ?)`、函数参数与 `GROUP BY a, b`；新增 `ON ... , secret_table` 精确回归用例。
+- **Sentinel 租户映射**：`sourceTenantId` 改为必填并在 profile/K8s 暴露 `NILM_SOURCE_TENANT_ID`；映射缺失时在读取上游前失败且不推进水位，补齐映射后后续行可交付；双租户同 node 只交付映射租户。
+- **Sentinel 毒记录与水位线**：移除 512 条 dead-letter 上限导致的永久停扫；时间解析失败行记录日志并由扫描偏移有界推进，只有有效行推进水位；新增 513 条毒行后有效行仍交付的回归。
+- **Sentinel 多副本重复扫描**：`start()` 与 `scanOnce()` 均只允许 shard 0；K8s 仍以 `NILM_SHARD_INDEX` 派生分片；未实现 Redis/Lease 选主，已在架构与 Sentinel README 中明确。
+- **SQL 守卫与驱动泄露**：逗号 JOIN 现在按 FROM 子句结构拒绝；MySQL `SOURCE_UNAVAILABLE` 对外只返回稳定 `source query failed`，原始驱动错误仅作为 `cause`。
+- **Scheduler claim 隔离**：单租户 `claimJob()` 失败记为失败结果，不再中断整轮；新增 tenant-a 抛错、tenant-b 继续的回归用例。
+- **Turn/Session/缓存回收**：完成 Turn 按 TTL、条数与字节上限淘汰；只有存在 complete 幂等项的 Turn 才保留 receipt，并为 receipt 增加 TTL 清理；失败发送淘汰后重放会重新处理而非伪造成功回执；空闲 Session 在 TTL 后 `runtime.release()`，维护定时器兜底清扫；对话缓存 LRU 淘汰但不隐藏 PVC 持久记录；按用户分钟窗口与租户并发上限返回 `429` + `Retry-After`，分片拒绝先于限流计数。
+- **Sentinel 水位单调性**：MySQL `saveWatermark()` 使用 `(record_time, record_id)` 条件更新，旧扫描进程不能覆盖更新水位；新增存储级回归。
+- **响应边界**：新增共享 `assertHttpEndpoint()` 与有界流式读取；notify、cold proxy、TDengine 均拒绝超限响应与非 HTTP(S)/带凭证 endpoint，并禁止重定向。
+- **结构化截断**：`NilmDataQuality.truncated` 由 timeseries 各采样上限写入；`nilm_energy_query` 不再匹配英文文案。
+- **CI 门禁**：删除全部新增 `as unknown`，未扩展 baseline；空 `catch` 已命名并说明原因。
+- **文档与 DDL**：测试规格更新为 48 文件/416 用例、19 张表、符号级锚点；修正 core/fetch-body 标题归属与 DDL 18→19；service/sentinel/bundle/K8s 双语 README、高层设计、架构与开发计划同步限流、nonce、shard 0 与必填租户映射事实。
 
-本轮按上一轮代码审查修复了以下问题，基线为已提交的 `f183def525`：
+## Verification Evidence
 
-- **跨租户电价** — `nilm_tariff_period` 增加 `tenant_id` 并使用租户化唯一键；`SourceTariffRepository` 查询时段时绑定租户，新增回归断言。
-- **同渠道多接收人丢告警/报告** — Outbox 与投递记录唯一键纳入 `user_ref`；投递记录写入 `user_ref`；调度器与哨兵均新增同渠道双接收人用例。
-- **`clientMessageId` 并发与失败毒化** — BFF 幂等状态拆为 pending/complete，首个异步操作前占用 pending；并发重试返回可重试的 `429`；失败在 `finally` 释放；同一会话在 `runtime.open` 期间禁止并发建轮。
-- **复审 P2：发送失败后的 turn 泄漏** — `agent.send()` 同步抛错时记录 `INTERNAL_ERROR`、完成 turn 收尾并释放会话；新增发送失败后同键重试成功的用例。
-- **复审 P3：pending 幂等语义** — 处理中的并发重复提交改为可重试的 `429 RATE_LIMITED`；中英文 README、高层设计与错误码表同步说明。
-- **复审 P3：测试缩进** — 并发幂等用例恢复 6 空格层级，符合 `.oxlintrc.json` 的 2 空格缩进规则；最终复审判定 PASS。
-- **电量截断误导** — 聚合电量与日统计查询超采样上限时产生告警；`nilm_energy_query` 在摘要中明确“仅部分窗口”。
-- **appliance 无 terminal 祖先** — 改为抛 `DATA_UNAVAILABLE`，不再把 `undefined` 断言成 `TerminalId`。
-- **vendor 依赖声明** — 六个 NILM 包的 `@deepseek-ai/schemastery` 统一为 `workspace:~`，`pnpm-lock.yaml` 对应六处 importer 已同步。
-- **文档门禁** — 阶段设计文档加入 translation-pairing 排除清单；文档内 `file://` 绝对链接改为相对链接；高层设计与架构文档同步租户化 DDL。
+### 2026-11-23 16:33 CST（第四次复审修复后，重建临时配置）
 
-验证证据（2026-11-19 14:38 CST）：
-
-- **全量 NILM** — `45` 个测试文件、`378` 通过、`1` 跳过（沙箱回环限制），零失败。
-- **NILM 源码类型检查** — 临时 `noEmit` 配置下 `packages/nilm/*/src` 零错误；整体退出码 2 仍来自仓库其他包缺失 `zod` 等既有依赖。
-- **NILM 测试类型检查** — 仅剩既有 `recovery.spec.ts` 无法解析 `@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts`。
-- **锁文件断言** — 六个包 manifest 与 lockfile importer 的 `schemastery` 声明均为 `workspace:~`，无不一致项。
-- **文档门禁** — translation pairing、limitations、model experience、doc refs、doc budgets、md links 六项全部退出 0。
-- **`git diff --check`** — 通过。
-- **依赖策略门禁** — 未能启动：当前安装缺 `@jridgewell/gen-mapping`（脚本在导入阶段退出），不是检测到的违规。
-- **`oxlint`** — 未执行：当前安装缺 `node_modules/oxlint`；缩进规则已按配置静态核对，不能声称 lint 已运行。
-
-### 测试规约重写验证（2026-11-19 15:27 CST）
-
-- **Vitest 实测** — 日常套件 45 个文件、379 个断言全部通过；`recovery.spec.ts` 2 个断言中 1 个通过、1 个因缺少原生 flock 跳过；合计 46 个文件、381 个断言。
-- **文档逐文件校验** — 46 个文件块全部存在；349 条普通用例标题与 32 条 pentest 声明表行相加为 381；与 Vitest JSON 逐文件比对零错误。
-- **文档门禁** — `verify-md-links` 2649 文件、`verify-doc-refs` 5271 文件、`verify-doc-budgets` 7 个在预算内；`git diff --check` 通过。
-
----
-
-## What WORKED (with evidence)
-
-- **共享审计 seam** — `packages/nilm/core/src/audit.ts` 定义不含请求体/提示词/凭证的事件与 sink；`packages/nilm/tools/src/index.ts` 通过 `ctx.get('nilmAudit')?.record(event)` 复用 BFF sink。`Context.nilmAudit` 为可选属性，未挂载 BFF 的单元组合保持静默。
-- **Tool 拒绝携带绑定身份** — `NilmContextService.current(agentId)` 以非抛错方式读取绑定；`audited()` 在安全失败时补充 `tenantId`、`userRef`、`requestId`、`sessionId`，随后重新抛出原始错误。无绑定时仍记录事件但不带租户，不把审计失败伪装成工具失败。
-- **SQL 守卫边界** — source 适配器的原始 `sql.rejected` 仍只写结构化日志，因为没有已验证调用方身份；穿过 Tool 边界的 SQL 拒绝由 `tool.rejected` 携带租户落库。
-- **调用方标识上界** — `packages/nilm/service/src/auth.ts` 在 HMAC 校验前拒绝超过 64 字符的租户/用户头（`401`）与超过 128 字符的请求 id（`400`），与 `nilm_conversation` / `nilm_security_audit` 字段宽度对齐。confirmed by: `auth.spec.ts` 9 个用例通过，含超长标识拒绝。
-- **BFF 审计持久化（基线已提交）** — `SqlSecurityAuditStore` 参数化批量写入；`BufferedSecurityAuditSink` 保持顺序、队列满丢最新、事务失败丢弃该批后继续；关闭时排空。未认证事件使用 `__unverified__`，配置拒绝同名真实租户。
-- **全量 NILM** — confirmed by: 45 个测试文件、379 通过（2026-11-19 15:27 CST）；`recovery.spec.ts` 另计 1 通过、1 跳过。
-- **类型检查** — confirmed by: 临时 `noEmit` 配置覆盖全部 `packages/nilm/*/src`，NILM 路径零错误；整体退出码 2 来自仓库其他包缺失 `zod` 等既有依赖。覆盖测试时仅剩既有 `recovery.spec.ts` 的工作区路径解析错误。
-- **文档门禁** — confirmed by: translation pairing 按 manifest 排除；limitations 398 个通过；model experience 398 个通过；doc refs 5271 个可解析；doc budgets 7 个在预算内；md links 2649 个通过。
-- **`git diff --check`** — confirmed by: 空白与行尾检查通过。
-
----
-
-## What Did NOT Work (and why)
-
-- **真实 MySQL 落库** — 未执行：没有可用 `nilm_system` 数据库。离线测试只验证 SQL 形状、参数绑定与队列语义，不证明真实表写入、锁等待或死锁行为。
-- **G4-4 现场门** — 未通过：真实双租户安全环境复验、生产日志汇留存、KMS/AES-GCM 密文验证、`nilm_security_audit` 一年保留与安全负责人签署均未完成。
-- **审计可靠性边界** — 当前是尽力写入：队列溢出丢弃最新事件，事务失败丢弃该批，事件不重试，也没有 Outbox 或保留任务。失败会记录稳定错误码与丢弃数量；脱敏结构化日志仍是兜底证据。
-- **SQL 守卫原始事件** — `nilm-source` 的 `sql.rejected` 仍只写结构化日志；单表完整链路只覆盖 BFF 与 Tool 边界事件。
-- **`pnpm` 命令** — 未执行：本机 `pnpm` 直接段错误。测试使用 pnpm store 中的 vitest 直跑；文档门禁用 `node --experimental-transform-types`。
-- **覆盖率门禁** — 未执行：临时环境缺 `@vitest/coverage-v8`；新增逻辑有行为用例，但未计入 per-file 100% 覆盖率统计。
-- **`verify-empty-catch`** — 未完成：沙箱内脚本 `spawnSync git` 返回 `EPERM`；申请沙箱外审批时自动审批服务返回 402。当前改动没有空 `catch`。
-- **`verify-cordis-config`** — 未完成：本机缺 `@deepseek-ai/cordis-plugin-include` workspace 解析，脚本无法启动。
-- **`verify-export-jsdoc`** — 仓库级扫描报 19 个既有违规，均位于本轮未修改的文件；新增导出未出现在违规列表。
-- **`git commit`** — 未执行：按用户要求由用户管理提交。
-
----
-
-## Key File Status
-
-| Path | Status | Summary |
-| :--- | :--- | :--- |
-| `packages/nilm/core/src/audit.ts` | New | 共享 `SecurityAuditEvent`、`SecurityAuditSink` 与可选 `Context.nilmAudit` 声明 |
-| `packages/nilm/core/src/index.ts` | Modified | 导出共享审计类型 |
-| `packages/nilm/context/src/index.ts` | Modified | 新增非抛错 `current(agentId)` |
-| `packages/nilm/tools/src/index.ts` | Modified | Tool 审计携带绑定 `CallContext`，写入 logger 与 `nilmAudit` |
-| `packages/nilm/service/src/audit.ts` | Modified | 审计事件类型改为共享 seam；持久化与队列逻辑不变 |
-| `packages/nilm/service/src/index.ts` | Modified | 构造并 `ctx.provide('nilmAudit', auditSink)`；BFF 审计写入同一 sink |
-| `packages/nilm/service/src/http.ts` | Modified | `AuditEvent` 复用共享类型；Tool/会话事件补齐 `sessionId`、`tool` |
-| `packages/nilm/service/src/auth.ts` | Modified | 租户/用户 64、请求 id 128 字符上界 |
-| `packages/nilm/service/tests/auth.spec.ts` | Modified | 超长标识拒绝用例 |
-| `packages/nilm/service/tests/security-pentest.spec.ts` | Modified | Tool 拒绝断言绑定租户、用户、请求与会话 |
-| `packages/nilm/context/tests/context.spec.ts` | Modified | `current()` 绑定与撤销语义 |
-| `packages/nilm/tools/tests/tools.spec.ts` | Modified | 测试 host 补 `current` |
-| `packages/nilm/service/README.md/.zh.md/.i18n.yaml` | Modified | 共享 sink、SQL logger-only 边界与标识上界 |
-| `docs/nilm-ai-agent-detailed-design-phase4.md` | Modified | §7.3 共享审计、SQL 边界与调用方标识上界 |
-| `docs/nilm-ai-agent-development-plan.md` | Modified | G4-4 证据补充 Tool sink 与 auth 上限 |
-| `docs/nilm-ai-agent-high-level-design.md` | Modified | 审计状态更新为 BFF/Tool 共享尽力写入 |
-
----
-
-## Architecture Decisions
-
-- **共享 seam 放在 core，持久化放在 service** — 领域插件只产生脱敏事件，不依赖 MySQL 或 BFF 实现；service 通过 `nilmSource.transaction` 批量落库。
-- **`ctx.provide('nilmAudit', sink)`** — 让 BFF 与 Tool 共享同一队列与关闭语义；未挂载 BFF 时可选属性缺失，Tool 审计退化为 logger-only。
-- **`current()` 不抛错** — 审计是失败路径的旁路，不能用新的 `TENANT_CONTEXT_UNAVAILABLE` 覆盖原始安全拒绝。
-- **SQL 原始事件保持 logger-only** — source 适配器无法证明调用方身份；只有穿过 Tool 边界、已有 `CallContext` 的拒绝才写入租户审计行。
-- **验签前约束标识长度** — 超长值在进入审计队列前被拒绝；避免单个签名请求使最多 64 行审计因字段溢出整批丢失。
-- **请求路径不等待数据库** — `record` 只入队；后台串行排空。HTTP、SSE 与取消不被审计写入延迟阻塞。
-- **有界队列显式丢弃** — 队列满丢弃最新事件并计数，避免攻击流量导致进程内存无界增长；失败不重试，因为日志仍是同事件的兜底副本。
-- **未认证事件使用合成租户** — 验签失败写入 `__unverified__`，不写调用方 Header；`resolveConfig` 拒绝配置同名真实租户。
-
----
-
-## Blockers & Open Questions
-
-- G4-4 现场门未通过：需真实双租户环境复验 32 个攻击用例，并采集生产日志、审计表行、保留与密文证据。
-- 审计写入是尽力语义；生产是否需要 Outbox/重试、丢弃告警阈值与告警路由仍需安全/运维确认。
-- `nilm_security_audit` 没有自动保留/归档任务，DDL 注释的“至少一年”仍需数据库运维实现并出示证据。
-- 部署前需确认现有 `signingSecrets` 的租户 id 均不超过 64 字符，且上游 `user_ref` 遵守同一上限；否则请求会被 `401` 拒绝。这是本轮新增的输入约束。
-- Tool/SQL 守卫原始审计事件仍为 logger-only；如需单表完整链路，source 适配器需要可验证的调用方身份或显式无租户事件类型。
-- G4-1/G4-2/G4-3 现场演练仍未闭环。
-
----
-
-## Exact Next Step
-
-1. 提交测试规约重写（推送需另行授权）：
+临时配置从 `/tmp/nilm-tmp-harness/` 复制回仓库根目录（`.vitest.nilm.tmp.config.mjs`、`.tsconfig.nilm.tmp.json`），可解析子路径导出，`recovery.spec.ts` 正常加载。
 
 ```sh
-cd /home/picohood/projects/opensource/deepseek-harness
-git add SESSION_STATE.md docs/nilm-ai-agent-test-specifications.md
-git commit -m "docs(nilm): rewrite test specifications from executable tests"
+node node_modules/vitest/vitest.mjs run --config .vitest.nilm.tmp.config.mjs --reporter=json --outputFile=/tmp/nilm-results-r5.json
+node node_modules/typescript/bin/tsc -p .tsconfig.nilm.tmp.json
 ```
 
-2. 阶段 4 现场实测验证闭环：
-   - G4-1: 真实调度器晨报全链路演练与产出留存；
-   - G4-2: K8s 集群实测 Pod SIGKILL、PVC 挂载漂移与撕裂恢复；
-   - G4-3: 100 家工厂真实压力测试与压测监控指标采集；
-   - G4-4: 双租户真实攻击对抗演练并留存落库审计表记录。
+- Vitest：`49` 个测试文件、`467` 个用例；`466` 通过、`0` 失败、`1` 跳过（`recovery.spec.ts` 原生 flock）；退出码 `0`。
+- 相对 14:55 的 48/416 口径：新增 `production-sql.spec.ts`（25，扫描 24 条生产只读 SQL 逐条过 `assertReadOnlySql`）；`sql-guard.spec.ts` 10→30；`sentinel/tests/store.spec.ts` 新增 6；`scanner.spec.ts` 17→19。15:19 的 46 文件口径源于 `/tmp/nilm-vitest.config.mjs` 不支持子路径导出，已弃用。
+- tsc：`^packages/nilm` 错误 `0`；退出码 `2` 仅来自 `vendor/cordis`（58）、`vendor/cosmokit`（6）、`vendor/schemastery`（4）既有错误。
+- 文档门禁全部退出 `0`：doc refs 5275 文件、doc budgets 7 份、md links 2649 文件；empty catch 无新增（132 条既有）；no-unknown-casts 无新增（1214 条既有）；4 组双语 README 配对一致；`git diff --check` 通过。
+- 测试规格 `docs/nilm-ai-agent-test-specifications.md` 统一更新：第 16 行与基线表合计 49/467（日常 48/465 + recovery 2）、阶段 0 为 14/109、阶段 3 为 10/82；第 81 行 sql-guard 30 断言及用例清单；新增 production-sql 条目；sentinel store 6 断言；G0-1 `source/tests` 86；G0-2 `sql-guard 30 + production-sql 25 = 55`；G3-1 `19 + 13 = 32`。每个文件条目计数与 JSON 逐一 diff 一致，阶段行求和 = 合计。
 
----
-
-## Environment & Setup Notes
-
-- NILM 全量测试（临时配置 `/tmp/vitest.nilm.config.mjs`，排除需要原生 `flock` 的 recovery 用例）：
+### 2026-11-23 15:19 CST（STRAIGHT_JOIN 修复后）
 
 ```sh
-V=$(find ~/.local/share/pnpm/store/v11/links/@/vitest -name vitest.mjs | head -1)
-node "$V" run --config /tmp/vitest.nilm.config.mjs
+node node_modules/vitest/vitest.mjs run --config /tmp/nilm-vitest.config.mjs packages/nilm/source
+node node_modules/vitest/vitest.mjs run --config /tmp/nilm-vitest.config.mjs --reporter=json --outputFile=/tmp/nilm-results-sqlfix.json
 ```
 
-- 类型检查（临时配置 `/tmp/tsconfig.nilm-44-src.json` 覆盖全部 NILM src）：
+- `packages/nilm/source`：7 文件、52 用例全部通过；`sql-guard.spec.ts` 21/21。
+- 全量 NILM：`418` 用例通过、`0` 失败；`recovery.spec.ts` 加载失败（临时配置无法解析子路径导出 `@deepseek-ai/dsh-compaction-image-offload/projection`，与本次改动无关），本次未计入。
+- `verify-empty-catch`、`verify-no-unknown-casts` 退出 `0`；`git diff --check -- packages/nilm/source` 通过。
+- **口径未对齐**：临时配置统计 46 个测试文件（含加载失败的 recovery），与先前 48 文件/416 用例不一致；原临时配置已不存在，差异来源未核实。因此测试规格文档中的 416、G0-2「9 断言」、第 81 行「10 个断言」均未改。
+
+### 2026-11-23 14:55 CST（第二轮修复后，先前记录）
+
+命令均在本机工作区实际执行：
 
 ```sh
-D=$(ls -d ~/.local/share/pnpm/store/v11/links/@/typescript/5.9.3/*/node_modules/typescript/bin/tsc | head -1)
-node "$D" -p /tmp/tsconfig.nilm-44-src.json 2>&1 | grep -E "packages/nilm/"
+node node_modules/vitest/vitest.mjs run --config .vitest.nilm.tmp.config.mjs --reporter=json --outputFile=/tmp/nilm-results-fixed2.json
 ```
 
-- 文档门禁：
+- `48` 个测试文件、`416` 个用例；`415` 通过、`0` 失败、`1` 跳过（`recovery.spec.ts` 缺少原生 flock）；退出码 `0`。
+- 新增用例覆盖：SQL `ON ... , secret_table` 拒绝、子句内逗号放行、必填租户映射、映射缺失水位不变、513 条毒行后有效行交付、watermark 回退防护、失败发送淘汰后幂等回执不泄漏、错误分片不消耗限流额度。
 
 ```sh
-node --experimental-transform-types scripts/verify-translation-pairing.ts packages/nilm/service/README.md
-node --experimental-transform-types scripts/verify-package-readme-limitations.ts
-node --experimental-transform-types scripts/verify-package-readme-model-experience.ts
+node node_modules/typescript/bin/tsc -p .tsconfig.nilm.tmp.json
+```
+
+- `packages/nilm/**/src` 零错误；退出码 `2` 仅来自 `vendor/cordis` 在临时 source-plane 配置下的既有类型错误，未出现在任何 NILM 文件。
+
+```sh
 node --experimental-transform-types scripts/verify-doc-refs.ts
 node --experimental-transform-types scripts/verify-doc-budgets.ts
 node --experimental-transform-types scripts/verify-md-links.ts
+node --experimental-transform-types scripts/verify-empty-catch.ts
+node --experimental-transform-types scripts/verify-no-unknown-casts.ts
+node --experimental-transform-types scripts/verify-translation-pairing.ts packages/nilm/service/README.md packages/nilm/sentinel/README.md packages/bundle/nilm-app/README.md deploy/k8s/README.md
 ```
 
-- 当前环境 `pnpm` 段错误；`tsx` 与工作区依赖不完整。不要反复重试提权；回环监听被沙箱拒绝是已知限制。
+- 以上门禁全部退出 `0`：doc refs 5274 文件、doc budgets 7 份、md links 2649 文件；empty catch 无新增；no-unknown-casts 无新增；四组双语 README 配对一致；`git diff --check` 通过。
+
+## Open Field Gates
+
+- G0-1/G0-4、G1-4、G3-1、G3-3/G3-4、G4-1/G4-2/G4-3/G4-4 的现场证据仍未完成：真实 MySQL/TDengine、K8s SIGKILL/PVC、30 秒 SLO、100 租户压测、双租户安全复验、生产日志/KMS/保留期。
+- G4-4 仍需安全负责人签署无 Critical/High 结论。
+- 真实 MySQL 上的 `nilm_source_tenant_map` 填充与运维流程尚未演练；部署必须先设置 `NILM_SOURCE_TENANT_ID` 并写入映射再启用 Sentinel。
+
+## Environment Notes
+
+- 本机 `pnpm` 仍不可用（段错误）；测试使用 pnpm store 的 `vitest.mjs` 直跑。
+- 为运行完整套件，临时在 `node_modules` 建立 `vite`、`@js-temporal/polyfill`、`rrule`、`p-limit`、`zod`、`@standard-schema/spec` 的软链接；这些均未写入仓库。
+- `.vitest.nilm.tmp.config.mjs`、`.gen-vitest-nilm.tmp.mjs`、`.tsconfig.nilm.tmp.json` 是本地临时文件，不属于交付；15:18 CST 核查时 `.vitest.nilm.tmp.config.mjs` 与 `.tsconfig.nilm.tmp.json` 已不在仓库根目录。
+- 仓库 `vitest.config.ts` 因缺 `vite-tsconfig-paths` 无法加载；当前替代为 `/tmp/nilm-vitest.config.mjs`（把 `packages/`、`vendor/` 下包名别名到各自 `src/index.ts`），不支持子路径导出，不属于交付。
+- 覆盖率门禁未执行：临时安装缺 `@vitest/coverage-v8`；不得声称 per-file 100% 覆盖率已通过。
+
+## Key Files
+
+- `packages/nilm/core/src/fetch-body.ts`（新增）：endpoint 校验与有界响应读取。
+- `packages/nilm/sentinel/src/index.ts`、`store.ts`、`source.ts`：必填租户映射、偏移扫描、shard 0、单调 watermark。
+- `packages/nilm/source/sql/init-nilm-system.sql`：新增 `nilm_source_tenant_map`。
+- `packages/nilm/service/src/http.ts`、`runtime.ts`：限流顺序、并发槽、Turn receipt TTL、缓存淘汰、Session release。
+- `packages/nilm/source/src/{sql-guard,mysql,tdengine,cold-proxy}.ts`：SQL 白名单（词法表因子解析）、稳定错误与响应边界。
+- `docs/nilm-ai-agent-test-specifications.md`：49 文件/467 用例清单与证据门矩阵（16:33 CST 按 Vitest JSON 同步，含 sql-guard 30、production-sql 25、sentinel store 6）。
+- `packages/nilm/source/tests/production-sql.spec.ts`（新增）：所有生产只读 SQL 经 `assertReadOnlySql` 的静态回归。
+
+## Independent Re-review #6（2026-11-23 17:42 CST）— REJECT（已处理，待第七次复审）
+
+- 结论：C1（`TABLE`/`VALUES` 查询表达式）与 C2（生产 SQL 字面量）确认已修复；新发现 2 Important、5 Minor。
+- I-1（已修复）：反引号包裹的危险函数名（`` `SLEEP`(…) ``、`` `GET_LOCK`(…) `` 等）绕过正则黑名单。守卫改为分词后逐 token 检查：裸词或反引号名在 `FORBIDDEN_FUNCTIONS` 中且下一个 token 为 `(` 即拒绝。
+- I-2（已修复）：`FOR SHARE`、`NOWAIT`、`SKIP LOCKED`、`SOURCE_POS_WAIT`/`MASTER_POS_WAIT`/`WAIT_FOR_EXECUTED_GTID_SET`/`WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS` 放行。`FOR`、`NOWAIT`、`LOCKED`、`INTO`、`OUTFILE`、`DUMPFILE` 作为裸词禁止，等待类函数加入禁用集合。
+- Minor 3（已修复）：关键字检查只作用于裸词，反引号列名/别名 `` `values` ``、`` `table` `` 放行。
+- Minor 6（已修复）：测试规格 G1-3 的 `http.spec.ts` 计数 24→26。
+- Minor 7（已修复）：无表豁免收紧为整句 `^SELECT\s+(?:1|\?)$`，`SELECT 1, USER(), …` 拒绝。
+- 未处理（已知风险）：`production-sql.spec.ts` 不识别别名/解构调用且 `' AND 1 = 0'` 分支未校验；`notify/src/store.ts:282-286` 仍用已弃用的 `VALUES()`。
+- `sql-guard.spec.ts` 30→46（+16）。17:53 CST 复跑：Vitest 49 文件、485 用例，484 通过、0 失败、1 跳过；tsc `^packages/nilm` 错误 0；测试规格已同步（总数 485、阶段 0 为 127、G0-1 104、G0-2 73、G1-3 35）；`git diff --check` 通过。
+
+## Independent Re-review #5（2026-11-23 16:43 CST）— APPROVE
+
+- I-1（已修复）：`production-sql.spec.ts` 原正则只识别反引号模板，漏掉 `source/src/index.ts:189` 的单引号 SQL。改为宽松匹配全部调用点（排除方法声明），首参支持三种引号，非内联字面量的调用点判失败；阈值提到 25。变异验证：把该 SQL 改为变量 `LIST_SQL` 后测试失败（2 条），恢复后 `git diff` 无残留。
+- 未处理的 Minor（记为已知风险）：M-1 插值展开为固定代表值，三元两支未分别测；M-2 守卫未拦 `USER()`/`VERSION()` 等信息函数；M-3 store upsert 语义仅用模拟求值器验证，需真实 MySQL 8.0.20+ 集成用例；M-4（18:05 CST 已处理）部署文档补“数据库账号”一节；M-5 未加引号的 `table`/`values` 列名或别名会被误拒。
+- 18:05 CST M-4：`deploy/k8s/README.md` 与 `README.zh.md` 新增“Database accounts / 数据库账号”一节：上游库只授两张白名单表的 `SELECT`，项目库授 `SELECT/INSERT/UPDATE/DELETE` 不含 DDL，迁移脚本用单独账号，附 `GRANT` 示例与 `SHOW GRANTS` 核对；`README.i18n.yaml` 已重新记录，`verify-translation-pairing` 通过。
+- 16:45 CST 复跑：Vitest 49 文件、469 用例，468 通过、0 失败、1 跳过；tsc `^packages/nilm` 错误 0；测试规格已同步（总数 469、阶段 0 为 111、production-sql 27、G0-1 88、G0-2 57）；`git diff --check` 通过。
+
+## Independent Re-review #4（2026-11-23 16:11 CST）— REJECT（已全部处理，待第五次复审）
+
+处理结果（16:33 CST 验证）：C1 `FORBIDDEN_KEYWORDS` 加 `TABLE`/`VALUES` 并补 3 条回归；C2 生产 SQL 字面量 `'10'` 等改 `?` 绑定，新增 `production-sql.spec.ts` 静态扫描全部生产只读 SQL 经守卫校验；I1 禁 `LOAD_FILE`、`GET_LOCK` 系列、`INTO`、`@`/`@@`，补 6 条回归，架构文档 1659 行已规定上游只读账号不授 `FILE`/`PROCESS`；M1 upsert 改为全绑定参数，不再使用 `VALUES()`；M2 `record_id` 列 `COLLATE utf8mb4_bin`，补字节序用例；M3 写入前钳制到 INT UNSIGNED 上限，补用例。
+
+
+第三次复审 4 项中 scanOffset 持久化、G3-1/测试规格计数、store.spec 语义测试已核实修复；sql-guard 原绕过已封住，但发现新问题：
+
+- **Critical C1**：`packages/nilm/source/src/sql-guard.ts`：MySQL 8.0.19+ `TABLE t` 语句绕过白名单，`... UNION TABLE mysql.user`、`WHERE EXISTS (TABLE mysql.user)` 被放行。建议 `FORBIDDEN_KEYWORDS` 加 `TABLE`、`VALUES` 并补回归。
+- **Critical C2**：守卫拒绝单引号字面量，但 `packages/nilm/sentinel/src/source.ts:36,64` 的生产 SQL 含 `unsafe_type <> '10'`，`head()`/`readAfter()` 运行时必被拒，scanOffset 路径在生产不可达。疑似同类：`safety/src/index.ts:161`、`scheduler/src/data-source.ts:261`、`sentinel/src/store.ts:510`。HEAD 已存在（非本轮引入）。建议改为 `?` 绑定参数，并新增测试让所有生产只读 SQL 经过 `assertReadOnlySql`。
+- **Important I1**：守卫未禁 `LOAD_FILE`、`GET_LOCK`/`RELEASE_LOCK`、`INTO @`、`@@`；部署文档需写明上游账号不授 FILE 权限。
+- **Minor M1**：`store.ts` `VALUES()` 在 MySQL 8.0.20+ 弃用，可改 `INSERT ... AS new`。
+- **Minor M2**：`store.spec.ts` 求值器按二进制比较 `record_id`，与列 collation 不一致；补大小写用例或列加 `COLLATE utf8mb4_bin`。
+- **Minor M3**：`scan_offset` 写入前未限 INT UNSIGNED 上限。
+- 复审员 tsc 输出被截断，另见 `vendor/cosmokit`、`vendor/schemastery` 错误；本地 grep `^packages/nilm` 为 0。
+
+## Next Step
+
+1. 第七次独立复审仍待进行（第六次复审 `REJECT` 的 I-1、I-2 与 Minor 3/6/7 已于 17:53 CST 修复）。18:14 CST 在当前工作区复跑：Vitest 49 文件、485 用例，484 通过、0 失败、1 跳过；tsc `^packages/nilm` 错误 0；`git diff --check` 通过。
+2. 第六次复审未处理的已知风险：`production-sql.spec.ts` 不识别别名/解构调用且 `' AND 1 = 0'` 分支未校验；`notify/src/store.ts:282-286` 仍用已弃用的 `VALUES()`。第五次复审 Minor M-1、M-2、M-3、M-5 仍未处理（M-4 已于 18:05 CST 处理）。
+3. 临时文件 `.vitest.nilm.tmp.config.mjs`、`.tsconfig.nilm.tmp.json` 不在仓库内，副本在 `/tmp/nilm-tmp-harness/`；再跑测试需临时拷回，跑完再删除。
+4. 仍待补：`recovery.spec.ts` 原生 flock 环境、覆盖率门禁（缺 `@vitest/coverage-v8`）、Open Field Gates 现场证据。
+5. 推送由用户决定；不要自行 `git add .`。

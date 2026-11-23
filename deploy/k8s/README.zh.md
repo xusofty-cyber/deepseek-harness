@@ -40,9 +40,31 @@ kubectl apply -f deploy/k8s/ingress.yaml
 
 平台网关运行在 `nilm` 命名空间之外时，需要把该命名空间的选择器同时加入 `allow-edge-ingress` 与 `nilm-agent` 入站规则。单独的 `podSelector` 只匹配策略所在命名空间；否则即使 Endpoints 已绑定到 `nilm-edge`，默认拒绝策略仍会阻断网关。
 
+## 数据库账号
+
+每个 MySQL 端点使用单独的账号，只授予代码需要的权限。应用层守卫会在只读路径上拒绝非 SELECT 语句，但账号权限才是守卫被绕过时仍然有效的边界。
+
+- 上游业务 MySQL（`NILM_UPSTREAM_MYSQL_*`）：只授予 `nilm_unsafe_record` 与 `appliance_category` 两张表的 `SELECT`。不授予写入、DDL 或整库权限。
+- 项目 MySQL（`NILM_LOCAL_MYSQL_*`）：授予项目库的 `SELECT`、`INSERT`、`UPDATE`、`DELETE`。写事务会更新告警、通知、水位、作业、报告和审计表。不授予 `CREATE`、`ALTER`、`DROP`、`GRANT OPTION` 或全局权限；`packages/nilm/source/sql/init-nilm-system.sql` 用单独的迁移账号执行。
+- `information_schema.tables` 不需要授权；MySQL 只返回该账号可访问的表，连通性探测正是据此检查。
+- TDengine 用户（`NILM_UPSTREAM_TDENGINE_USER`）同样应只有热数据库和统计数据库的读权限。
+
+```sql
+-- Upstream business database: read two tables only.
+CREATE USER 'nilm_upstream_ro'@'10.0.0.%' IDENTIFIED BY '<password>';
+GRANT SELECT ON upstream_db.nilm_unsafe_record TO 'nilm_upstream_ro'@'10.0.0.%';
+GRANT SELECT ON upstream_db.appliance_category TO 'nilm_upstream_ro'@'10.0.0.%';
+
+-- Project database: data reads and writes, no DDL.
+CREATE USER 'nilm_app'@'10.0.0.%' IDENTIFIED BY '<password>';
+GRANT SELECT, INSERT, UPDATE, DELETE ON nilm_db.* TO 'nilm_app'@'10.0.0.%';
+```
+
+替换 `upstream_db`、`nilm_db`、主机模式（Pod 出站 CIDR）和密码。把凭据写入私有 Secret 前，先用 `SHOW GRANTS FOR 'nilm_upstream_ro'@'10.0.0.%';` 核对结果。
+
 ## 分片数与 PVC 拓扑
 
-`configmap.yaml` 的 `NILM_SHARD_COUNT` 必须等于 `statefulset.yaml` 的 `spec.replicas`。bundle 从 `NILM_POD_NAME` 末尾序号推导 `NILM_SHARD_INDEX`；两者不一致会让部分租户无法路由，或被路由到以 `403 SCOPE_FORBIDDEN` 拒绝它们的 Pod。
+`configmap.yaml` 的 `NILM_SHARD_COUNT` 必须等于 `statefulset.yaml` 的 `spec.replicas`。bundle 从 `NILM_POD_NAME` 末尾序号推导 `NILM_SHARD_INDEX`；两者不一致会让部分租户无法路由，或被路由到以 `403 SCOPE_FORBIDDEN` 拒绝它们的 Pod。应用 ConfigMap 前必须把 `NILM_SOURCE_TENANT_ID` 替换为在 `nilm_source_tenant_map` 中有映射的上游租户键；缺少映射时 Sentinel 拒绝扫描。
 
 每个 Pod 把自己的 `data` 卷挂载到 `/data`，JSONL 后端写入 `/data/sessions/<编码后的租户>`。会话索引位于 `/data/sessions/<编码后的租户>/.nilm/conversations`。卷是 ReadWriteOnce，重新调度的 Pod 必须等卷从旧节点卸载后才能启动。
 

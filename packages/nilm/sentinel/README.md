@@ -6,7 +6,7 @@ Runs active inspection without a model: an incremental reader over upstream `nil
 
 ## Configuration
 
-`pollIntervalMs` (default 5 s) drives the incremental safety scan; `energyIntervalMs` (default 60 s) drives energy rules; `bucketMinutes` (default 5) sets the de-duplication and escalation window; `batchSize` bounds each upstream read; `escalateAfterWindows` (default 3) requires consecutive rising buckets before a warning escalates; `maxAttempts` is copied into every Outbox row; `templates` maps `wx_subscribe`, `wx_template`, `wecom_webhook`, and `sms` to provider template ids; `nominalVoltageV` supplies the R-05 fallback; `workerId` labels the scanner in writes and logs.
+`pollIntervalMs` (default 5 s) drives the incremental safety scan; `energyIntervalMs` (default 60 s) drives energy rules; `bucketMinutes` (default 5) sets the de-duplication and escalation window; `batchSize` bounds each upstream read; `escalateAfterWindows` (default 3) requires consecutive rising buckets before a warning escalates; `maxAttempts` is copied into every Outbox row; `templates` maps `wx_subscribe`, `wx_template`, `wecom_webhook`, and `sms` to provider template ids; `nominalVoltageV` supplies the R-05 fallback; `workerId` labels the scanner in writes and logs; required `sourceTenantId` and `sourceId` (default `upstream_unsafe`) resolve `nilm_source_tenant_map` before asset ownership; `shardIndex`/`shardCount` admit only shard 0 as the scanner.
 
 Tenant thresholds live in `nilm_alert_rule.threshold_json` with `nilm_tenant_config.notification_policy_json`. No threshold, baseline, or recipient is compiled into the package.
 
@@ -25,4 +25,7 @@ Tenant thresholds live in `nilm_alert_rule.threshold_json` with `nilm_tenant_con
 - R-03 currently fires from upstream `nilm_unsafe_record` classifications only. The realtime power-over-capacity path is not implemented.
 - R-04 remains disabled until upstream exposes per-phase current columns; the scanner logs the missing signal once per tenant and rule instead of estimating imbalance.
 - Safety classifications bypass the silence window. Unknown upstream `unsafe_type` values are ignored instead of being mapped to a severity.
+- Upstream `nilm_unsafe_record` has no usable `tenant_id`. `sourceTenantId` is required; a missing `nilm_source_tenant_map` row rejects the batch before any upstream read and does not advance the watermark. Populate the mapping table before enabling the scanner.
+- Only shard 0 scans. There is no Redis or Kubernetes Lease election; running two scanner replicas for the same shard would duplicate evaluation even though `uk_tenant_dedupe` suppresses most duplicate alerts.
+- A row whose `record_time` cannot be parsed is excluded from the watermark and logged. Offset scanning walks a bounded batch of such rows on each pass and persists the offset in `nilm_sentinel_watermark.scan_offset`, so a poison prefix cannot permanently block later valid rows and a restart resumes from the stored offset; after a valid row advances the watermark, the offset resets to zero and the prefix is behind it.
 - The upstream incremental query assumes the watermark index `(asset_id, record_time, record_id)` or an equivalent index is available; the DBA assessment is still open.

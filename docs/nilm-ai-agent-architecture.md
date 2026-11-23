@@ -554,7 +554,7 @@ flowchart TB
         Hot["上游 TDengine 热库<br/>90 天，只读"]
         ColdProxy["冷库只读代理"]
         Cold["内网 TDengine 冷库<br/>90 天以上"]
-        Redis["Redis<br/>限流/租约/缓存"]
+        Redis["Redis（未接入）<br/>目标限流/租约/缓存"]
     end
 
     Web --> WAF
@@ -578,8 +578,8 @@ flowchart TB
     Notifier --> Mini
     Notifier --> App
     Notifier --> Web
-    BFF --> Redis
-    Sentinel --> Redis
+    BFF -.->|未接入| Redis
+    Sentinel -.->|未接入| Redis
 ```
 
 ### 4.2 分层与依赖规则
@@ -667,11 +667,11 @@ sequenceDiagram
 | :--- | :--- | :--- | :--- | :--- |
 | `nilm-edge` | Deployment / Ingress | 2+ | 无状态 | TLS、WAF、限流、路由；不解析业务身份 |
 | `nilm-agent` | StatefulSet（按租户分片） | 每分片 1 主 | PVC（Session JSONL） | 承载 dsh runtime、业务 BFF 路由与领域 Tool |
-| `nilm-sentinel` | Deployment | 1 Leader + 备用 | 规则状态在 DB/Redis | 实时巡检；Leader 选举避免重复检测 |
+| `nilm-sentinel` | Deployment | 仅 shard 0 扫描 | 规则状态在 DB | 实时巡检；当前以分片序号避免重复检测，未实现 Lease 选主 |
 | `nilm-scheduler` | Deployment | 1 Leader | 任务状态在 DB | 08:30 晨报、20/25 日力调预测 |
 | `nilm-notifier` | Deployment | 2+ | 无状态 | 从 Outbox 领取任务，按渠道限流 |
 | `nilm-cold-proxy` | 内网 Deployment | 2 | 无状态 | 只读、限查询、mTLS，隔离冷库 |
-| Redis | 托管/集群 | 3 | 有状态 | 限流、租约、短 TTL 缓存 |
+| Redis | 托管/集群（未接入） | 3 | 有状态 | 目标形态的跨副本限流、租约与短 TTL 缓存；当前 BFF 使用进程内状态 |
 | 本项目 MySQL | 托管 | 主备 | 有状态 | 租户配置、告警、Outbox、审计 |
 
 上游 MySQL、TDengine 热库与冷库不是本项目部署单元，只作为只读依赖；其容量、升级与备份由数据源责任方负责。
@@ -1501,9 +1501,9 @@ Critical 卡片必须包含：发生点位、相别、越限值、发生时间�
 - **实时安全链路**：以 5 秒级增量轮询或 CDC 读取上游隐患表 `nilm_unsafe_record`，对新增记录做去重、分级与模板投递；目标是入库到触达 p95 < 30 秒。
 - **用能分析链路**：以 1~5 分钟窗口读取热库功率/设备状态，计算夜间基载偏离、设备长开、空载等；目标是发现后 1 分钟内生成告警，再异步请求 Agent 研判。
 
-v1 采用“水位线 + 增量字段”的轮询方案，前提是该上游表有可用的自增/时间字段与索引；若没有，需 DBA 评估增加 `(asset_id, record_time, record_id)` 或等价索引。水位线 `(record_time, record_id)` 持久化在本项目 `nilm_sentinel_watermark`，重启后从未处理位置继续。`tenant_id` 是否直存尚未确认，检测器用租户到资产的映射做过滤；只有 DDL 确认存在该列时才加 `tenant_id` 条件。若后续接入 Debezium/Kafka CDC，检测器接口不变，只替换事件源。
+v1 采用“水位线 + 增量字段”的轮询方案，前提是该上游表有可用的自增/时间字段与索引；若没有，需 DBA 评估增加 `(asset_id, record_time, record_id)` 或等价索引。水位线 `(record_time, record_id)` 与毒记录前缀扫描偏移 `scan_offset` 一并持久化在本项目 `nilm_sentinel_watermark`，重启后从未处理位置继续，不重扫已检查的无效时间行。上游 `nilm_unsafe_record` 未直存可用 `tenant_id`，检测器先通过 `nilm_source_tenant_map(source_id, source_tenant_id, tenant_id)` 解析唯一本项目租户，再按该租户查询资产所有权；映射缺失或同一 node 映射到多个租户时拒绝处理并记录拒绝原因，禁止跨租户 fan-out。若后续接入 Debezium/Kafka CDC，检测器接口不变，只替换事件源。
 
-检测器不调用模型，状态保存在数据库/Redis：
+检测器不调用模型，状态保存在数据库（当前实现无 Redis 依赖）：
 
 - 每条规则有 `rule_id`、`tenant_id`、`enabled`、`threshold_json`、`window`、`cooldown`、`severity`、`channels`。
 - 基线按“同租户、同车间、同星期几、同时间段”的过去 4 周中位数计算；节假日与检修日排除。
@@ -1685,7 +1685,7 @@ sequenceDiagram
 
 ### 9.7 滥用、限流与成本
 
-- 每 `user_ref` 每分钟最多 10 次提问、每租户并发最多 20 个 turn；超限返回 `RATE_LIMITED`。
+- 每 `user_ref` 每分钟最多 10 次提问、每租户并发最多 20 个 turn；超限返回 `RATE_LIMITED` 与 `Retry-After`。当前计数在单个 BFF 进程内，多副本全局配额需 Redis 或 edge 限流。
 - 每租户每日 Token 预算与告警短信预算可配置；超预算降级为模板回答或仅文本，不静默扣费。
 - 同一 `client_message_id` 幂等；同一 `user_ref` 短时间重复问题走缓存/合并。
 - 大区间查询、频繁图表、导出类请求单独限流。
@@ -1758,7 +1758,7 @@ sequenceDiagram
 | 微信接口失败 | 通知失败 | 重试 + 短信兜底；记录渠道错误 |
 | 短信额度耗尽 | 兜底失败 | 升级企微/电话值班；告警运维 |
 | Session 存储满 | 新会话无法落盘 | 拒绝新 turn，保留告警链路；清理/扩容 |
-| Redis 不可用 | 限流/租约失效 | 本地限流兜底；选主任务暂停，避免双发 |
+| Redis 未接入 | 跨副本限流/nonce/租约缺失 | 当前由 BFF 进程内限流与 nonce、Sentinel shard 0 扫描提供单实例语义；多副本前接入 Redis |
 
 ### 10.5 重试、超时与熔断
 

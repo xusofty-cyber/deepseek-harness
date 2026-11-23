@@ -6,7 +6,7 @@
 
 ## Configuration
 
-`pollIntervalMs`（默认 5 秒）驱动安全增量扫描；`energyIntervalMs`（默认 60 秒）驱动用能规则；`bucketMinutes`（默认 5）决定去重与升级窗口；`batchSize` 限制每次上游读取行数；`escalateAfterWindows`（默认 3）要求连续多个窗口加剧后才升级；`maxAttempts` 写入每条 Outbox 记录；`templates` 把 `wx_subscribe`、`wx_template`、`wecom_webhook`、`sms` 映射到渠道模板；`nominalVoltageV` 提供 R-05 回退值；`workerId` 标识扫描器的写入与日志。
+`pollIntervalMs`（默认 5 秒）驱动安全增量扫描；`energyIntervalMs`（默认 60 秒）驱动用能规则；`bucketMinutes`（默认 5）决定去重与升级窗口；`batchSize` 限制每次上游读取行数；`escalateAfterWindows`（默认 3）要求连续多个窗口加剧后才升级；`maxAttempts` 写入每条 Outbox 记录；`templates` 把 `wx_subscribe`、`wx_template`、`wecom_webhook`、`sms` 映射到渠道模板；`nominalVoltageV` 提供 R-05 回退值；`workerId` 标识扫描器的写入与日志；必填的 `sourceTenantId` 与默认 `upstream_unsafe` 的 `sourceId` 在解析资产所有权前查询 `nilm_source_tenant_map`；`shardIndex`/`shardCount` 只允许 shard 0 执行扫描。
 
 租户阈值位于 `nilm_alert_rule.threshold_json`，通知策略位于 `nilm_tenant_config.notification_policy_json`。包内不内置阈值、基线或接收方。
 
@@ -25,4 +25,7 @@
 - R-03 当前只由上游 `nilm_unsafe_record` 的分类触发；实时功率超过额定容量的判定路径尚未实现。
 - R-04 在上游提供分相电流列之前保持停用；扫描器按“租户+规则”只记录一次缺失信号，不做不平衡度估算。
 - 安全类告警绕过静默窗口。未知的上游 `unsafe_type` 直接忽略，不映射为任何严重度。
+- 上游 `nilm_unsafe_record` 没有可用 `tenant_id`。`sourceTenantId` 为必填；缺少 `nilm_source_tenant_map` 行会在读取上游前拒绝整批记录，且不推进水位线。启用扫描器前必须先填充映射表。
+- 只有 shard 0 扫描。当前没有 Redis 或 Kubernetes Lease 选主；同一分片运行两个扫描副本会重复评估，虽然 `uk_tenant_dedupe` 会抑制大部分重复告警。
+- `record_time` 无法解析的记录不推进水位线并被记录日志。扫描偏移每轮有界推进并持久化到 `nilm_sentinel_watermark.scan_offset`，因此毒记录前缀不会永久阻塞后续有效记录，重启也从已持久化的偏移继续；有效记录推进水位线后偏移归零，该前缀落在水位线之后。
 - 上游增量查询假设存在 `(asset_id, record_time, record_id)` 或等价索引；DBA 评估仍未完成。

@@ -394,20 +394,27 @@ export class NilmSchedulerService extends Service {
     work: () => Promise<{ reportInserted: boolean; notifications: number; qualityFindings: number }>,
   ): Promise<JobWork> {
     const idempotencyKey = `${tenant.tenantId}:${jobType}:${businessDate}`
-    const claim = await this.repository.claimJob({
-      jobType,
-      tenantId: tenant.tenantId,
-      scheduledAtMs,
-      idempotencyKey,
-      nowMs,
-      leaseMs: this.resolved.jobLeaseMs,
-      retryDelayMs: this.resolved.jobRetryDelayMs,
-      newJobRunId: () => this.newId('job'),
-    })
     const outcome = (status: JobOutcome['status'], errorCode?: string): JobOutcome => ({
       jobType, tenantId: tenant.tenantId, businessDate, status,
       ...(errorCode === undefined ? {} : { errorCode }),
     })
+    let claim: Awaited<ReturnType<SchedulerRepository['claimJob']>>
+    try {
+      claim = await this.repository.claimJob({
+        jobType,
+        tenantId: tenant.tenantId,
+        scheduledAtMs,
+        idempotencyKey,
+        nowMs,
+        leaseMs: this.resolved.jobLeaseMs,
+        retryDelayMs: this.resolved.jobRetryDelayMs,
+        newJobRunId: () => this.newId('job'),
+      })
+    } catch (error) {
+      const code = errorCode(error)
+      this.ctx.logger.warn(redactText(`nilm-scheduler ${jobType} claim failed for ${tenant.tenantId}: ${errorText(error)}`))
+      return { outcome: outcome('failed', code), reportInserted: false, notifications: 0, qualityFindings: 0 }
+    }
     if (claim.status === 'completed') return { outcome: outcome('completed-earlier'), reportInserted: false, notifications: 0, qualityFindings: 0 }
     if (claim.status === 'in-progress') return { outcome: outcome('in-progress'), reportInserted: false, notifications: 0, qualityFindings: 0 }
     try {

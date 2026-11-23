@@ -102,11 +102,11 @@ Tool 边界拒绝携带已绑定的 `CallContext` 租户、用户、请求与会
 ## 已知限制与延期工作
 
 - 阶段 1 未实现 mTLS，只接受 HMAC 信封。生产接入仍需补齐概要设计要求的 mTLS 路径。
-- nonce 缓存、幂等映射与本轮缓冲仍为进程内状态。重启会丢失进行中的 SSE 缓冲与 `clientMessageId` 去重；同一租户由多个副本同时服务前，仍需 Redis nonce 与共享幂等记录。
+- nonce 缓存、幂等映射、限流窗口与本轮缓冲仍为进程内状态。重启会丢失进行中的 SSE 缓冲与 `clientMessageId` 去重；同一租户由多个副本同时服务前，仍需 Redis nonce、共享限流与共享幂等记录。单进程内的每用户分钟窗口与租户活跃轮次上限超限时返回 `429` 与 `Retry-After`。
 - 只有配置 `sessionsRoot` 时会话元数据才持久化；未配置时 BFF 保留阶段 1 的进程内索引。MySQL `nilm_conversation` 表尚未接入，PVC 索引是当前的重启路径。
 - 分片数变更与租户迁移属于部署操作。BFF 会拒绝非归属分片上的租户，但从不迁移 Session 文件，也不承诺跨分片漂移恢复。
 - 离线测试覆盖租户目录布局、会话重载、撕裂尾部读取与 Session 写入互斥。真实 StatefulSet SIGKILL 与 PVC 重挂仍需集群演练。
-- 每轮缓冲与幂等记录在进程生命周期内保留；阶段 1 尚未实现淘汰或归档策略。
+- 完成的轮次按 `turnRetentionMs`、`maxRetainedTurns` 与 `maxRetainedTurnBytes` 淘汰；每次淘汰保留轻量幂等 receipt，已完成的 `clientMessageId` 重放仍返回原 `turnId`。空闲 runtime Session 在 `sessionIdleTtlMs` 后释放，维护定时器会兜底清扫未重排的计时器；对话缓存在超过上限时淘汰最久未用记录，持久化记录仍可从 PVC 索引重载。
 - 审计记录经进程内脱敏后写入插件日志，并通过有界尽力队列写入 `nilm_security_audit`。BFF 与已绑定租户的 Tool 拒绝共享该 sink；SQL 守卫事件仍只写日志。队列溢出与数据库失败会在记录数量后丢弃事件；尚无重试、Outbox 或保留策略。生产日志汇留存与 KMS 加密证据仍待补齐。
 - 告警列表与确认委托给 `nilmSentinel`；该插件未挂载时按设计保持不可用。在签名请求契约接受查询参数前，不提供分页。
 - G4-3 harness 仅有离线测试。尚未产出 100 租户 x 5 会话、30 分钟的目标报告；自检验证的是 harness，不是服务容量。

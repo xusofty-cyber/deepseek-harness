@@ -86,4 +86,21 @@ describe('HttpTdengineExecutor', () => {
       message: 'TDengine request was cancelled',
     })
   })
+
+  it('refuses an oversized response and disables redirects', async () => {
+    const fetch = vi.fn(() => Promise.resolve(new Response('{'.repeat(8 * 1024 * 1024 + 1), { status: 200 })))
+    vi.stubGlobal('fetch', fetch)
+    const executor = new HttpTdengineExecutor('http://tdengine/rest/sql/tpim_system', 1_000)
+
+    await expect(executor.query('SHOW TABLES')).rejects.toMatchObject({
+      code: 'SOURCE_UNAVAILABLE',
+      message: 'TDengine response exceeds the configured size limit',
+    })
+    expect((fetch.mock.calls[0]?.[1] as RequestInit).redirect).toBe('manual')
+  })
+
+  it('rejects an endpoint that is not an absolute HTTP URL', async () => {
+    const executor = new HttpTdengineExecutor('file:///tmp/tdengine', 100)
+    await expect(executor.query('SHOW TABLES')).rejects.toThrow('TDengine URL must use http or https')
+  })
 })

@@ -78,6 +78,12 @@ export interface NilmAgentRuntime {
    * @returns the visible history, or `undefined` when no session is persisted.
    */
   history(sessionId: string, callContext: CallContext, mode: TurnMode): Promise<readonly ChatMessage[] | undefined>
+
+  /**
+   * Stop and remove one idle live agent. Persisted Session data is untouched.
+   * @param sessionId - conversation/session identity.
+   */
+  release(sessionId: string): Promise<void>
 }
 
 /** Cordis-backed runtime implementation. */
@@ -121,9 +127,20 @@ export class CordisNilmRuntime implements NilmAgentRuntime {
       return existing
     }
     const handle = await this.openHandle(sessionId, callContext.tenantId, mode)
-    const runtimeSession = new RuntimeSession(this.ctx, handle.agent, callContext, mode, this.config)
+    const runtimeSession = new RuntimeSession(this.ctx, handle, callContext, mode, this.config)
     this.sessions.set(sessionId, runtimeSession)
     return runtimeSession
+  }
+
+  /**
+   * Stop and remove one idle live agent. Persisted Session data is untouched.
+   * @param sessionId - conversation/session identity.
+   */
+  async release(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (session === undefined) return
+    this.sessions.delete(sessionId)
+    await session.dispose()
   }
 
   /**
@@ -192,10 +209,11 @@ class RuntimeSession implements NilmAgentSession {
   private readonly toolNames = new Map<string, string>()
   private unbind: (() => void) | undefined
   private readonly config: ResolvedConfig
+  private released = false
 
   constructor(
     private readonly ctx: Context,
-    private readonly agent: Agent,
+    private readonly handle: AgentHandle,
     callContext: CallContext,
     mode: TurnMode,
     config: ResolvedConfig,
@@ -205,6 +223,10 @@ class RuntimeSession implements NilmAgentSession {
     this.config = config
     this.rebind(callContext)
     this.select(mode)
+  }
+
+  private get agent(): Agent {
+    return this.handle.agent
   }
 
   get sessionId(): string {
@@ -300,6 +322,17 @@ class RuntimeSession implements NilmAgentSession {
         || code === 'SOURCE_UNAVAILABLE'
         || code === 'QUERY_TIMEOUT',
     })
+  }
+
+  /** Stop the agent, remove its caller binding, and release every live listener. */
+  async dispose(): Promise<void> {
+    if (this.released) return
+    this.released = true
+    this.unbind?.()
+    this.unbind = undefined
+    this.listeners.clear()
+    this.toolNames.clear()
+    await this.handle.dispose()
   }
 }
 

@@ -337,7 +337,8 @@ async function failure(response: Response): Promise<LoadHttpError> {
   try {
     const body = JSON.parse(text) as { code?: unknown }
     if (typeof body.code === 'string') code = body.code
-  } catch {
+  } catch (error: unknown) {
+    void error
     // The diagnostic below already carries the status and raw text.
   }
   return new LoadHttpError(response.status, code, `${String(response.status)} ${text.slice(0, 300)}`)
@@ -346,9 +347,10 @@ async function failure(response: Response): Promise<LoadHttpError> {
 async function jsonObject(response: Response): Promise<Record<string, unknown>> {
   const text = await safeText(response)
   try {
-    const value = JSON.parse(text) as unknown
+    const value: unknown = JSON.parse(text)
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) return value as Record<string, unknown>
-  } catch {
+  } catch (error: unknown) {
+    void error
     // Fall through to the protocol error below.
   }
   throw new LoadHttpError(response.status, undefined, 'response body is not a JSON object')

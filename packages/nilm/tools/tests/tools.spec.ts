@@ -277,7 +277,7 @@ describe('nilm tools', () => {
     applyTools(h)
     const result = await execute(registered.get('nilm_scope_resolve')!, { level: 'workshop', id: 'w1' })
     const facts = result.facts as Record<string, unknown>
-    expect((facts.meterSet as unknown[]).length).toBe(200)
+    expect(Array.isArray(facts.meterSet) ? facts.meterSet.length : 0).toBe(200)
     expect(facts.meterSetTruncated).toBe(true)
     expect((result.warnings as string[]).some(warning => warning.includes('truncated'))).toBe(true)
   })
@@ -302,6 +302,27 @@ describe('nilm tools', () => {
     expect((JSON.parse(rendered[0]!.text) as Record<string, unknown>).chart).toBeUndefined()
     const meta = tool.output.presentationMeta?.(args, result) as Record<string, unknown>
     expect(meta.dataQuality).not.toBe(null)
+  })
+
+  it('labels a capped energy result as partial from the structured quality flag', async () => {
+    const cappedQuality: NilmDataQuality = {
+      ...quality,
+      truncated: true,
+      warnings: ['energy rows were capped at the configured limit'],
+    }
+    const { host: h, registered } = host({ energy: energy({ dataQuality: cappedQuality }) })
+    applyTools(h)
+    const tool = registered.get('nilm_energy_query')!
+    const result = await execute(tool, {
+      scope: { level: 'channel', id: 'c1' },
+      start: new Date(START).toISOString(),
+      end: new Date(END).toISOString(),
+      granularity: 'hour',
+      include_cost: false,
+    })
+
+    expect(result.summaryText as string).toContain('仅为部分窗口')
+    expect(result.dataQuality).toMatchObject({ truncated: true })
   })
 
   it('exposes clarification candidates in presentation metadata for ambiguous scopes', async () => {
@@ -359,7 +380,7 @@ describe('nilm tools', () => {
     const chart = result.chart as Record<string, unknown>
     expect(chart.version).toBe(1)
     expect(chart.unit).toBe('%')
-    expect((chart.series as unknown[]).length).toBe(3)
+    expect(Array.isArray(chart.series) ? chart.series.length : 0).toBe(3)
     const rendered = tool.output.render(args, result)
     expect((JSON.parse(rendered[0]!.text) as Record<string, unknown>).chart).toBeUndefined()
     expect((tool.output.presentationMeta?.(args, result) as Record<string, unknown>).chart).toMatchObject({ unit: '%' })
@@ -396,7 +417,7 @@ describe('nilm tools', () => {
     }
     const result = await execute(tool, args)
     const facts = result.facts as Record<string, unknown>
-    expect((facts.events as unknown[]).length).toBe(1)
+    expect(Array.isArray(facts.events) ? facts.events.length : 0).toBe(1)
     expect(result.summaryText as string).toContain('检测到 1 个功率突变')
     const chart = result.chart as Record<string, unknown>
     expect(chart.version).toBe(1)
@@ -422,7 +443,8 @@ describe('nilm tools', () => {
     const hidden = await execute(tool, { scope: { level: 'channel', id: 'c1' }, start, end, analysisMode: 'disaggregation_only' })
     expect((hidden.facts as Record<string, unknown>).hazards).toEqual([])
     const shown = await execute(tool, { scope: { level: 'channel', id: 'c1' }, start, end, analysisMode: 'comprehensive' })
-    expect(((shown.facts as Record<string, unknown>).hazards as unknown[]).length).toBe(1)
+    const shownHazards = (shown.facts as Record<string, unknown>).hazards
+    expect(Array.isArray(shownHazards) ? shownHazards.length : 0).toBe(1)
     await expect(execute(tool, {
       scope: { level: 'channel', id: 'c1' },
       start,
@@ -487,7 +509,7 @@ describe('nilm tools', () => {
     })
     const facts = result.facts as Record<string, unknown>
     expect(facts.totalMatched).toBe(25)
-    expect((facts.records as unknown[]).length).toBe(20)
+    expect(Array.isArray(facts.records) ? facts.records.length : 0).toBe(20)
     expect((result.warnings as string[]).some(warning => warning.includes('truncated'))).toBe(true)
   })
 })

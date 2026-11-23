@@ -216,7 +216,7 @@ async function runSelfCheck(options: Options, tenantIds: readonly string[]): Pro
 
 function resolveTenantIds(options: Options): readonly string[] {
   if (options.tenantsFile !== undefined) {
-    const value = JSON.parse(readFileSync(options.tenantsFile, 'utf8')) as unknown
+    const value: unknown = JSON.parse(readFileSync(options.tenantsFile, 'utf8'))
     if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string' || entry === '')) {
       throw new Error('--tenants-file must contain a JSON array of non-empty tenant ids')
     }
@@ -231,7 +231,7 @@ function resolveTenantIds(options: Options): readonly string[] {
 }
 
 function readManifest(path: string, tenants: number, tenantIds: readonly string[] | undefined): DatasetManifest {
-  const value = JSON.parse(readFileSync(path, 'utf8')) as unknown
+  const value: unknown = JSON.parse(readFileSync(path, 'utf8'))
   const parsed = validateDatasetManifest(value, tenants, tenantIds)
   if (parsed.manifest === undefined) throw new Error(`dataset manifest rejected:\n  ${parsed.errors.join('\n  ')}`)
   return parsed.manifest
@@ -243,7 +243,7 @@ function readSecrets(): Record<string, string> {
     throw new Error('NILM_LOAD_SIGNING_SECRETS must name a JSON file or hold the tenant-to-secret JSON object')
   }
   const text = source.trimStart().startsWith('{') ? source : readFileSync(source, 'utf8')
-  const value = JSON.parse(text) as unknown
+  const value: unknown = JSON.parse(text)
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('NILM_LOAD_SIGNING_SECRETS must decode to an object keyed by tenant id')
   }

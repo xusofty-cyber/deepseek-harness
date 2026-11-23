@@ -1,6 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 import NilmSentinelService, {
+  resolveConfig,
   type AlertCreatedPayload,
   type AlertRuleRow,
   type ApplianceSignal,
@@ -27,9 +28,13 @@ class FakeUnsafeSource implements IncrementalUnsafeSource {
     return last === undefined ? undefined : { recordTimeMs: timeOf(last), recordId: last.recordId }
   }
 
-  async readAfter(after: Watermark, limit: number): Promise<UnsafeRecordRow[]> {
+  async readAfter(after: Watermark, limit: number, offset = 0): Promise<UnsafeRecordRow[]> {
     return this.rows
-      .filter(row => timeOf(row) > after.recordTimeMs || (timeOf(row) === after.recordTimeMs && row.recordId > after.recordId))
+      .filter((row) => {
+        const time = timeOf(row)
+        return Number.isNaN(time) || time > after.recordTimeMs || (time === after.recordTimeMs && row.recordId > after.recordId)
+      })
+      .slice(Math.max(0, offset))
       .slice(0, limit)
   }
 }
@@ -109,11 +114,22 @@ function tenant(): TenantPolicy {
   }
 }
 
-function scope(): { tenantId: string; scope: { level: 'channel'; id: string; name: string } } {
-  return { tenantId: 'tenant-a', scope: { level: 'channel' as const, id: 'channel-1', name: '一号车间/总进线' } }
+function scope(tenantId = 'tenant-a'): { tenantId: string; scope: { level: 'channel'; id: string; name: string } } {
+  return { tenantId, scope: { level: 'channel' as const, id: 'channel-1', name: '一号车间/总进线' } }
 }
 
-function setup(options: { rules?: AlertRuleRow[]; now?: () => number; recipients?: readonly RecipientRef[] } = {}): {
+function setup(options: {
+  rules?: AlertRuleRow[]
+  now?: () => number
+  recipients?: readonly RecipientRef[]
+  shardIndex?: number
+  shardCount?: number
+  sourceId?: string
+  sourceTenantId?: string
+  batchSize?: number
+  store?: MemorySentinelStore
+  unsafe?: FakeUnsafeSource
+} = {}): {
   service: NilmSentinelService
   store: MemorySentinelStore
   unsafe: FakeUnsafeSource
@@ -122,13 +138,15 @@ function setup(options: { rules?: AlertRuleRow[]; now?: () => number; recipients
   events: AlertCreatedPayload[]
 } {
   const ctx = context()
-  const store = new MemorySentinelStore()
-  const unsafe = new FakeUnsafeSource()
+  const store = options.store ?? new MemorySentinelStore()
+  const unsafe = options.unsafe ?? new FakeUnsafeSource()
   const signals = new FakeSignals()
   const recipients = new FakeRecipients(options.recipients)
+  const sourceTenantId = options.sourceTenantId ?? 'upstream-a'
   store.tenants.set('tenant-a', tenant())
   store.rules.set('tenant-a', options.rules ?? [])
   store.scopes.set('channel-1', [scope()])
+  if (options.sourceTenantId === undefined) store.sourceTenants.set(`upstream_unsafe\n${sourceTenantId}`, 'tenant-a')
   const events: AlertCreatedPayload[] = []
   ctx.on('nilm/alert/created', payload => { events.push(payload) })
   let counter = 0
@@ -137,6 +155,11 @@ function setup(options: { rules?: AlertRuleRow[]; now?: () => number; recipients
     energyIntervalMs: 60 * 60_000,
     bucketMinutes: 5,
     templates: { sms: 'tpl-alert' },
+    shardIndex: options.shardIndex ?? 0,
+    shardCount: options.shardCount ?? 1,
+    ...(options.batchSize === undefined ? {} : { batchSize: options.batchSize }),
+    ...(options.sourceId === undefined ? {} : { sourceId: options.sourceId }),
+    sourceTenantId,
   }, {
     store,
     unsafe,
@@ -156,6 +179,150 @@ describe('incremental safety scan', () => {
     expect(await fixture.service.scanOnce()).toEqual({ read: 0, inserted: 0 })
     expect(fixture.store.events).toHaveLength(0)
     expect(fixture.store.watermarks.get('upstream_unsafe')?.recordId).toBe('r0')
+  })
+
+  it('requires a configured source tenant', () => {
+    expect(() => resolveConfig({})).toThrow('sourceTenantId is required')
+  })
+
+  it('delivers a dual-owned node only to the tenant mapped from the upstream source tenant', async () => {
+    const fixture = setup({ rules: [ruleRow()], sourceTenantId: 'upstream-a' })
+    fixture.store.tenants.set('tenant-b', { ...tenant(), tenantId: 'tenant-b', tenantName: '工厂B' })
+    fixture.store.scopes.set('channel-1', [scope('tenant-a'), scope('tenant-b')])
+    fixture.store.sourceTenants.set('upstream_unsafe\nupstream-a', 'tenant-a')
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    fixture.unsafe.rows.push(row({ recordId: 'r1', recordTime: new Date(T0 + 1_000) }))
+
+    expect(await fixture.service.scanOnce()).toEqual({ read: 1, inserted: 1 })
+    expect(fixture.store.events.map(event => event.tenantId)).toEqual(['tenant-a'])
+    expect(fixture.store.outbox.map(item => item.tenantId)).toEqual(['tenant-a'])
+  })
+
+  it('refuses upstream rows when the configured source tenant has no mapping', async () => {
+    const fixture = setup({ rules: [ruleRow()], sourceTenantId: 'upstream-unknown' })
+    fixture.store.sourceTenants.set('upstream_unsafe\nupstream-unknown', 'tenant-a')
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    expect(fixture.store.watermarks.get('upstream_unsafe')?.recordId).toBe('r0')
+    fixture.store.sourceTenants.delete('upstream_unsafe\nupstream-unknown')
+    fixture.unsafe.rows.push(row({ recordId: 'r1', recordTime: new Date(T0 + 1_000) }))
+
+    expect(await fixture.service.scanOnce()).toEqual({ read: 0, inserted: 0 })
+    expect(fixture.store.watermarks.get('upstream_unsafe')?.recordId).toBe('r0')
+    expect(fixture.store.events).toHaveLength(0)
+    expect(fixture.store.outbox).toHaveLength(0)
+
+    fixture.store.sourceTenants.set('upstream_unsafe\nupstream-unknown', 'tenant-a')
+    expect(await fixture.service.scanOnce()).toEqual({ read: 1, inserted: 1 })
+    expect(fixture.store.events).toHaveLength(1)
+    expect(fixture.store.watermarks.get('upstream_unsafe')?.recordId).toBe('r1')
+  })
+
+  it('does not bootstrap a NaN watermark from a poisoned head row', async () => {
+    const fixture = setup()
+    fixture.unsafe.rows.push(row({ recordId: 'bad-head', recordTime: 'not-a-date' }))
+
+    await fixture.service.scanOnce()
+    const watermark = fixture.store.watermarks.get('upstream_unsafe')
+    expect(Number.isFinite(watermark?.recordTimeMs)).toBe(true)
+    expect(watermark?.recordId).toBe('')
+  })
+
+  it('skips a poison timestamp and still processes later rows', async () => {
+    const fixture = setup({ rules: [ruleRow()] })
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    fixture.unsafe.rows.push(
+      row({ recordId: 'bad', recordTime: 'not-a-date' }),
+      row({ recordId: 'r2', recordTime: new Date(T0 + 2_000) }),
+    )
+
+    expect(await fixture.service.scanOnce()).toEqual({ read: 2, inserted: 1 })
+    expect(fixture.store.events).toHaveLength(1)
+    expect(fixture.store.watermarks.get('upstream_unsafe')?.recordId).toBe('r2')
+  })
+
+  it('keeps an all-invalid batch from corrupting the watermark', async () => {
+    const fixture = setup({ rules: [ruleRow()] })
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    fixture.unsafe.rows.push(
+      row({ recordId: 'bad-1', recordTime: 'not-a-date' }),
+      row({ recordId: 'bad-2', recordTime: 'still-not-a-date' }),
+    )
+
+    expect(await fixture.service.scanOnce()).toEqual({ read: 2, inserted: 0 })
+    expect(fixture.store.watermarks.get('upstream_unsafe')?.recordId).toBe('r0')
+  })
+
+  it('dead-letters an all-invalid batch so later valid rows still process', async () => {
+    const fixture = setup({ rules: [ruleRow()] })
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    fixture.unsafe.rows.push(
+      row({ recordId: 'bad-1', recordTime: 'not-a-date' }),
+      row({ recordId: 'bad-2', recordTime: 'still-not-a-date' }),
+    )
+
+    expect(await fixture.service.scanOnce()).toEqual({ read: 2, inserted: 0 })
+    expect(fixture.store.watermarks.get('upstream_unsafe')?.recordId).toBe('r0')
+
+    fixture.unsafe.rows.push(row({ recordId: 'r3', recordTime: new Date(T0 + 3_000) }))
+    expect(await fixture.service.scanOnce()).toEqual({ read: 1, inserted: 1 })
+    expect(fixture.store.events).toHaveLength(1)
+    expect(fixture.store.watermarks.get('upstream_unsafe')?.recordId).toBe('r3')
+  })
+
+  it('advances past more than the former dead-letter bound', async () => {
+    const fixture = setup({ rules: [ruleRow()] })
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    for (let index = 0; index < 513; index += 1) {
+      fixture.unsafe.rows.push(row({ recordId: `bad-${String(index).padStart(3, '0')}`, recordTime: 'not-a-date' }))
+    }
+    fixture.unsafe.rows.push(row({ recordId: 'valid', recordTime: new Date(T0 + 2_000) }))
+
+    expect(await fixture.service.scanOnce()).toEqual({ read: 514, inserted: 1 })
+    expect(fixture.store.events).toHaveLength(1)
+    expect(fixture.store.watermarks.get('upstream_unsafe')?.recordId).toBe('valid')
+  })
+
+  it('resumes a poison-prefix walk from the persisted offset after a restart', async () => {
+    const store = new MemorySentinelStore()
+    const unsafe = new FakeUnsafeSource()
+    const first = setup({ rules: [ruleRow()], batchSize: 2, store, unsafe })
+    unsafe.rows.push(row({ recordId: 'r0' }))
+    await first.service.scanOnce()
+    // 24 poison rows: the final batch after a restart is the lone valid row, which
+    // ends the pass without re-reading the prefix the fake source keeps returning.
+    for (let index = 0; index < 24; index += 1) {
+      unsafe.rows.push(row({ recordId: `bad-${String(index).padStart(2, '0')}`, recordTime: 'not-a-date' }))
+    }
+    unsafe.rows.push(row({ recordId: 'valid', recordTime: new Date(T0 + 2_000) }))
+
+    // One pass is capped at 10 batches of 2 rows, so it stops inside the prefix.
+    expect(await first.service.scanOnce()).toEqual({ read: 20, inserted: 0 })
+    expect(store.watermarks.get('upstream_unsafe')).toMatchObject({ recordId: 'r0', scanOffset: 20 })
+
+    // A fresh instance over the same store reads only the 4 unexamined poison rows plus the valid row.
+    const restarted = setup({ rules: [ruleRow()], batchSize: 2, store, unsafe })
+    expect(await restarted.service.scanOnce()).toEqual({ read: 5, inserted: 1 })
+    expect(store.events).toHaveLength(1)
+    expect(store.watermarks.get('upstream_unsafe')).toMatchObject({ recordId: 'valid', scanOffset: 0 })
+  })
+
+  it('does not scan upstream on a non-zero shard', async () => {
+    const fixture = setup({ rules: [ruleRow()], shardIndex: 1, shardCount: 4 })
+    fixture.unsafe.rows.push(row({ recordId: 'r1' }))
+
+    expect(await fixture.service.scanOnce()).toEqual({ read: 0, inserted: 0 })
+    expect(fixture.store.watermarks.size).toBe(0)
+    expect(fixture.store.events).toHaveLength(0)
+  })
+
+  it('rejects a shard index outside the configured shard count', () => {
+    expect(() => resolveConfig({ shardIndex: 4, shardCount: 4 })).toThrow('shardIndex must be less than shardCount')
   })
 
   it('writes the alert event and Outbox in one store call and emits the enrich payload', async () => {

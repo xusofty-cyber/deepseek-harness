@@ -13,6 +13,9 @@ import {
 } from '@deepseek-ai/dsh-nilm-core'
 import type { NilmSourceService } from '@deepseek-ai/dsh-nilm-source'
 
+/** `DATE_FORMAT` pattern, bound as a parameter because the read-only guard rejects SQL literals. */
+const SQL_DATE_FORMAT = '%Y-%m-%d'
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     nilmTariff: NilmTariffService
@@ -158,12 +161,12 @@ export class SourceTariffRepository implements TariffRepository {
   async listEffective(tenantId: string, atMs: number, signal?: AbortSignal): Promise<TariffPlan[]> {
     const day = localDate(atMs)
     const rows = await this.source().queryLocalReadOnly<PlanRow>(
-      `SELECT plan_id AS planId, DATE_FORMAT(effective_from, '%Y-%m-%d') AS effectiveFrom,
-              DATE_FORMAT(effective_to, '%Y-%m-%d') AS effectiveTo
+      `SELECT plan_id AS planId, DATE_FORMAT(effective_from, ?) AS effectiveFrom,
+              DATE_FORMAT(effective_to, ?) AS effectiveTo
          FROM nilm_tariff_plan
         WHERE tenant_id = ? AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)
         ORDER BY effective_from`,
-      [tenantId, day, day],
+      [SQL_DATE_FORMAT, SQL_DATE_FORMAT, tenantId, day, day],
       signal,
     )
     return this.assemble(tenantId, rows, signal)
@@ -177,11 +180,11 @@ export class SourceTariffRepository implements TariffRepository {
    */
   async getPlan(tenantId: string, planId: string, signal?: AbortSignal): Promise<TariffPlan | undefined> {
     const rows = await this.source().queryLocalReadOnly<PlanRow>(
-      `SELECT plan_id AS planId, DATE_FORMAT(effective_from, '%Y-%m-%d') AS effectiveFrom,
-              DATE_FORMAT(effective_to, '%Y-%m-%d') AS effectiveTo
+      `SELECT plan_id AS planId, DATE_FORMAT(effective_from, ?) AS effectiveFrom,
+              DATE_FORMAT(effective_to, ?) AS effectiveTo
          FROM nilm_tariff_plan
         WHERE tenant_id = ? AND plan_id = ?`,
-      [tenantId, planId],
+      [SQL_DATE_FORMAT, SQL_DATE_FORMAT, tenantId, planId],
       signal,
     )
     return (await this.assemble(tenantId, rows, signal))[0]
@@ -200,11 +203,11 @@ export class SourceTariffRepository implements TariffRepository {
       dayType: TariffDayType
       season: string
     }>(
-      `SELECT DATE_FORMAT(date, '%Y-%m-%d') AS date, day_type AS dayType, season
+      `SELECT DATE_FORMAT(date, ?) AS date, day_type AS dayType, season
          FROM nilm_calendar_day
         WHERE tenant_id = ? AND date >= ? AND date <= ?
         ORDER BY date`,
-      [tenantId, localDate(startMs), localDate(endMs - 1)],
+      [SQL_DATE_FORMAT, tenantId, localDate(startMs), localDate(endMs - 1)],
       signal,
     )
     return rows.map(row => {

@@ -34,6 +34,7 @@ export class MemorySentinelStore implements SentinelStore {
   readonly tenants = new Map<string, TenantPolicy>()
   readonly rules = new Map<string, AlertRuleRow[]>()
   readonly scopes = new Map<string, ScopeOwnership[]>()
+  readonly sourceTenants = new Map<string, string>()
   readonly watermarks = new Map<string, Watermark>()
   readonly events: StoredEvent[] = []
   readonly outbox: StoredOutbox[] = []
@@ -43,7 +44,18 @@ export class MemorySentinelStore implements SentinelStore {
   }
 
   async saveWatermark(sourceName: string, watermark: Watermark): Promise<void> {
-    this.watermarks.set(sourceName, watermark)
+    const current = this.watermarks.get(sourceName)
+    const next = { ...watermark, scanOffset: watermark.scanOffset ?? 0 }
+    if (current === undefined
+      || watermark.recordTimeMs > current.recordTimeMs
+      || (watermark.recordTimeMs === current.recordTimeMs && watermark.recordId > current.recordId)) {
+      this.watermarks.set(sourceName, next)
+      return
+    }
+    if (watermark.recordTimeMs === current.recordTimeMs && watermark.recordId === current.recordId
+      && next.scanOffset > (current.scanOffset ?? 0)) {
+      this.watermarks.set(sourceName, next)
+    }
   }
 
   async listTenants(): Promise<TenantPolicy[]> {
@@ -54,8 +66,14 @@ export class MemorySentinelStore implements SentinelStore {
     return this.rules.get(tenantId) ?? []
   }
 
-  async resolveScopes(nodeIds: readonly string[]): Promise<ScopeOwnership[]> {
-    return nodeIds.flatMap(nodeId => this.scopes.get(nodeId) ?? [])
+  async resolveSourceTenant(sourceId: string, sourceTenantId: string): Promise<string | undefined> {
+    return this.sourceTenants.get(`${sourceId}\n${sourceTenantId}`)
+  }
+
+  async resolveScopes(nodeIds: readonly string[], tenantId?: string): Promise<ScopeOwnership[]> {
+    return nodeIds
+      .flatMap(nodeId => this.scopes.get(nodeId) ?? [])
+      .filter(ownership => tenantId === undefined || ownership.tenantId === tenantId)
   }
 
   async recentObservations(

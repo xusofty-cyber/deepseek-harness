@@ -140,6 +140,21 @@ describe('NilmTimeseriesService', () => {
     const warning = 'meter c1 summarized energy rows were capped at 3; totals cover only returned samples'
     expect(result.warnings).toContain(warning)
     expect(result.dataQuality.warnings).toContain(warning)
+    expect(result.dataQuality.truncated).toBe(true)
+  })
+
+  it('leaves the structured truncation flag off when every row is returned', async () => {
+    const source = fakeSource({
+      queryHot: async sql => sql.includes('summarized_energy')
+        ? [
+            { ts: base, energy_value: 10 },
+            { ts: base + 10 * 60_000, energy_value: 15 },
+          ]
+        : [],
+    })
+    const service = setup(source)
+    const result = await service.queryAggregatedEnergy(callContext(), [meter()], range(base, base + HOUR, 'hour'), 'hour')
+    expect(result.dataQuality.truncated).toBeUndefined()
   })
 
   it('uses the statistics endpoint for day aggregates with a projected path', async () => {

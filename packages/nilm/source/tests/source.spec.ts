@@ -35,7 +35,7 @@ function executor(rows: unknown[] = []): SqlExecutor & { calls: Array<{ sql: str
 
 function allLocalTables(): Array<{ tableName: string }> {
   return [
-    'nilm_tenant_config', 'nilm_asset_snapshot', 'nilm_measurement_binding', 'nilm_conversation',
+    'nilm_tenant_config', 'nilm_asset_snapshot', 'nilm_source_tenant_map', 'nilm_measurement_binding', 'nilm_conversation',
     'nilm_turn_log', 'nilm_security_audit', 'nilm_alert_rule', 'nilm_alert_event', 'nilm_alert_transition',
     'nilm_notification_outbox', 'nilm_notification_record', 'nilm_sentinel_watermark', 'nilm_job_run', 'nilm_report', 'nilm_tariff_plan',
     'nilm_tariff_period', 'nilm_calendar_day', 'nilm_pf_policy',

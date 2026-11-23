@@ -8,11 +8,11 @@
 
 所有端点与凭据来自 `NILM_*` 环境变量或部署方拥有的 profile patch。仓库不内嵌数据库地址、账号或密码。`NILM_DEEPSEEK_API_KEY` 选择模型凭据；数据源服务独立读取五个端点族。
 
-该 profile 是 `@deepseek-ai/dsh-official-bundles` 中的随附模板，因此 `dsh --profile nilm` 会从 `@deepseek-ai/dsh-nilm-app` 初始化它。阶段 3 还读取 `NILM_SENTINEL_*`、`NILM_ALERT_TEMPLATES` 与 `NILM_NOTIFY_*`；渠道网关 URL 与令牌在供应商签约前保持为空，此时渠道挂载为未配置并直接进入死信而不重试。
+该 profile 是 `@deepseek-ai/dsh-official-bundles` 中的随附模板，因此 `dsh --profile nilm` 会从 `@deepseek-ai/dsh-nilm-app` 初始化它。阶段 3 还读取 `NILM_SENTINEL_*`、`NILM_ALERT_TEMPLATES`、`NILM_SOURCE_TENANT_ID` 与 `NILM_NOTIFY_*`；渠道网关 URL 与令牌在供应商签约前保持为空，此时渠道挂载为未配置并直接进入死信而不重试。
 
 ## 阶段 1 启动
 
-生产树挂载 BFF，而不是 stdio JSON-RPC 载体。必需部署值包括 `NILM_*` 数据源端点、`NILM_DEEPSEEK_API_KEY` 与 `NILM_SIGNING_SECRETS`（租户 id 到 HMAC 密钥的 JSON 对象）。BFF 监听 `NILM_SERVICE_HOST:NILM_SERVICE_PORT`，暴露 `/healthz` 与 `/readyz`；调用方流量使用 [`nilm-service`](../../nilm/service/README.zh.md) 文档定义的签名 REST/SSE 协议。
+生产树挂载 BFF，而不是 stdio JSON-RPC 载体。必需部署值包括 `NILM_*` 数据源端点、`NILM_SOURCE_TENANT_ID`、`NILM_DEEPSEEK_API_KEY` 与 `NILM_SIGNING_SECRETS`（租户 id 到 HMAC 密钥的 JSON 对象）。BFF 监听 `NILM_SERVICE_HOST:NILM_SERVICE_PORT`，暴露 `/healthz` 与 `/readyz`；调用方流量使用 [`nilm-service`](../../nilm/service/README.zh.md) 文档定义的签名 REST/SSE 协议。
 
 ## 已知限制与延期工作
 

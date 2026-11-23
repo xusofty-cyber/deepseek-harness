@@ -20,6 +20,9 @@ import type {
   TenantSchedule,
 } from './model.ts'
 
+/** `DATE_FORMAT` pattern, bound as a parameter because the read-only guard rejects SQL literals. */
+const SQL_DATE_FORMAT = '%Y-%m-%d'
+
 /** Project database surface used by the scheduler. */
 export interface SchedulerDatabase {
   /**
@@ -187,12 +190,12 @@ export class MysqlSchedulerRepository implements SchedulerRepository {
   async alertCounts(tenantId: string, startMs: number, endMs: number): Promise<AlertCounts> {
     const rows = await this.database().queryLocalReadOnly<{ severity: string; total: number; unresolved: number }>(
       `SELECT severity, COUNT(*) AS total,
-              SUM(status <> 'resolved') AS unresolved
+              SUM(status <> ?) AS unresolved
          FROM nilm_alert_event
         WHERE tenant_id = ? AND detected_at >= ? AND detected_at < ?
-          AND status <> 'false_positive'
+          AND status <> ?
         GROUP BY severity`,
-      [tenantId, new Date(startMs), new Date(endMs)],
+      ['resolved', tenantId, new Date(startMs), new Date(endMs), 'false_positive'],
     )
     const counts: AlertCounts = { critical: 0, warning: 0, info: 0, unresolved: 0 }
     for (const row of rows) {
@@ -226,12 +229,12 @@ export class MysqlSchedulerRepository implements SchedulerRepository {
       summaryText: string | null
     }>(
       `SELECT report_id AS reportId, report_type AS reportType,
-              DATE_FORMAT(report_date, '%Y-%m-%d') AS reportDate,
+              DATE_FORMAT(report_date, ?) AS reportDate,
               payload_json AS payloadJson, summary_text AS summaryText
          FROM nilm_report
         WHERE tenant_id = ? AND report_type = ? AND report_date <= ?
         ORDER BY report_date DESC LIMIT 1`,
-      [tenantId, reportType, onOrBeforeDate],
+      [SQL_DATE_FORMAT, tenantId, reportType, onOrBeforeDate],
     )
     const row = rows[0]
     if (row === undefined) return undefined
@@ -289,7 +292,8 @@ function decodeJson(value: unknown): unknown {
   if (value === null || value === undefined) return null
   if (typeof value !== 'string') return value
   try {
-    return JSON.parse(value) as unknown
+    const decoded: unknown = JSON.parse(value)
+    return decoded
   } catch (error) {
     throw new Error('stored report payload is not valid JSON', { cause: error })
   }

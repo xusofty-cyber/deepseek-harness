@@ -8,11 +8,11 @@ Standalone NILM production profile. `cordis.patch.yml` is a complete Cordis tree
 
 All endpoints and credentials come from `NILM_*` environment variables or a deployment-owned profile patch. The repository embeds no database address, account, or password. `NILM_DEEPSEEK_API_KEY` selects the model credential; the source service reads its five endpoint families independently.
 
-The profile is a shipped template in `@deepseek-ai/dsh-official-bundles`, so `dsh --profile nilm` initializes it from `@deepseek-ai/dsh-nilm-app`. Stage 3 also reads `NILM_SENTINEL_*`, `NILM_ALERT_TEMPLATES`, and `NILM_NOTIFY_*`; channel gateway URLs and tokens stay empty until a provider is contracted, which mounts the channel as unconfigured and dead-letters it rather than retrying.
+The profile is a shipped template in `@deepseek-ai/dsh-official-bundles`, so `dsh --profile nilm` initializes it from `@deepseek-ai/dsh-nilm-app`. Stage 3 also reads `NILM_SENTINEL_*`, `NILM_ALERT_TEMPLATES`, `NILM_SOURCE_TENANT_ID`, and `NILM_NOTIFY_*`; channel gateway URLs and tokens stay empty until a provider is contracted, which mounts the channel as unconfigured and dead-letters it rather than retrying.
 
 ## Stage 1 startup
 
-The production tree mounts the BFF instead of a stdio JSON-RPC carrier. Required deployment values are the `NILM_*` source endpoints, `NILM_DEEPSEEK_API_KEY`, and `NILM_SIGNING_SECRETS` (a JSON object from tenant id to HMAC secret). The BFF listens on `NILM_SERVICE_HOST:NILM_SERVICE_PORT` and exposes `/healthz` and `/readyz`; caller traffic uses the signed REST/SSE protocol documented in [`nilm-service`](../../nilm/service/README.md).
+The production tree mounts the BFF instead of a stdio JSON-RPC carrier. Required deployment values are the `NILM_*` source endpoints, `NILM_SOURCE_TENANT_ID`, `NILM_DEEPSEEK_API_KEY`, and `NILM_SIGNING_SECRETS` (a JSON object from tenant id to HMAC secret). The BFF listens on `NILM_SERVICE_HOST:NILM_SERVICE_PORT` and exposes `/healthz` and `/readyz`; caller traffic uses the signed REST/SSE protocol documented in [`nilm-service`](../../nilm/service/README.md).
 
 ## Known Limitations and Deferred Work
 

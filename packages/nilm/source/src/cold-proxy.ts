@@ -3,7 +3,15 @@
  * @module @deepseek-ai/dsh-nilm-source/cold-proxy
  */
 
-import { NilmSourceError } from '@deepseek-ai/dsh-nilm-core'
+import {
+  assertHttpEndpoint,
+  NilmSourceError,
+  readBoundedResponseText,
+  ResponseLimitError,
+} from '@deepseek-ai/dsh-nilm-core'
+
+/** Cold templates are bounded; larger proxy responses are rejected. */
+const MAX_COLD_RESPONSE_BYTES = 8 * 1024 * 1024
 
 /** One templated cold query. */
 export interface ColdQueryRequest {
@@ -38,16 +46,36 @@ export class HttpColdProxyTransport implements ColdProxyTransport {
    * @returns parsed JSON response.
    */
   async request(request: ColdQueryRequest, signal: AbortSignal): Promise<unknown> {
+    try {
+      assertHttpEndpoint(this.baseUrl, 'cold proxy URL')
+    } catch (error) {
+      throw new NilmSourceError('INVALID_SOURCE_CONFIG', error instanceof Error ? error.message : 'cold proxy URL is invalid', { cause: error })
+    }
     const response = await fetch(this.baseUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(request),
       signal,
+      redirect: 'manual',
     })
     if (!response.ok) {
       throw new NilmSourceError('COLD_LINK_UNAVAILABLE', `cold proxy returned HTTP ${response.status}`)
     }
-    return response.json()
+    let text: string
+    try {
+      text = await readBoundedResponseText(response, MAX_COLD_RESPONSE_BYTES)
+    } catch (error) {
+      if (error instanceof ResponseLimitError) {
+        throw new NilmSourceError('COLD_LINK_UNAVAILABLE', 'cold proxy response exceeds the configured size limit', { cause: error })
+      }
+      throw new NilmSourceError('COLD_LINK_UNAVAILABLE', 'cold proxy response could not be read', { cause: error })
+    }
+    try {
+      const value: unknown = JSON.parse(text)
+      return value
+    } catch (error) {
+      throw new NilmSourceError('COLD_LINK_UNAVAILABLE', 'cold proxy returned invalid JSON', { cause: error })
+    }
   }
 }
 

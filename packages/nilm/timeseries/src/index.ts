@@ -252,6 +252,7 @@ export class NilmTimeseriesService extends Service {
     if (points.length < collected.length) {
       warnings.push(`realtime result reduced from ${String(collected.length)} to ${String(points.length)} points`)
     }
+    const truncated = points.length < collected.length
     const steps = uniqueTimestamps(collected)
     const dataQuality = quality(
       window,
@@ -260,6 +261,7 @@ export class NilmTimeseriesService extends Service {
       'raw',
       warnings,
       this.now(),
+      truncated,
     )
     return { points, dataQuality, warnings }
   }
@@ -357,6 +359,7 @@ export class NilmTimeseriesService extends Service {
       warnings.push(`appliance rows were capped at ${String(this.config.rawPointLimit)} samples`)
       points.length = this.config.rawPointLimit
     }
+    const truncated = rows.length > this.config.rawPointLimit
     const dataQuality = quality(
       window,
       uniqueTimestamps(points.map(point => ({ tsMs: point.tsMs }))),
@@ -364,6 +367,7 @@ export class NilmTimeseriesService extends Service {
       'raw',
       warnings,
       this.now(),
+      truncated,
     )
     return { points, dataQuality, warnings }
   }
@@ -389,6 +393,7 @@ export class NilmTimeseriesService extends Service {
     const warnings: string[] = []
     const samples: AnalysisSample[] = []
     const perMeterLimit = Math.max(1, Math.floor(this.config.analysisPointLimit / Math.max(1, meterSet.length)))
+    let truncated = false
     if (meterSet.length > 1) {
       warnings.push(`analysis budget of ${String(this.config.analysisPointLimit)} samples was split across ${String(meterSet.length)} meters at ${String(perMeterLimit)} samples each; narrow the scope for full resolution`)
     }
@@ -400,6 +405,7 @@ export class NilmTimeseriesService extends Service {
         ORDER BY ts LIMIT ${String(perMeterLimit + 1)}`
       const rows = await this.source.queryHot<Record<string, unknown>>(sql, signal)
       if (rows.length > perMeterLimit) {
+        truncated = true
         warnings.push(`meter ${channel} analysis rows were capped at ${String(perMeterLimit)} samples`)
       }
       for (const row of rows.slice(0, perMeterLimit)) {
@@ -415,6 +421,7 @@ export class NilmTimeseriesService extends Service {
       'raw',
       warnings,
       this.now(),
+      truncated,
     )
     return { samples, dataQuality, warnings }
   }
@@ -451,10 +458,11 @@ export class NilmTimeseriesService extends Service {
   ): Promise<EnergyQueryResult> {
     const warnings: string[] = []
     const buckets: EnergyBucket[] = []
+    const cap = { truncated: false }
     for (const meter of meterSet) {
       const channel = meter.channelId as string
-      const summarized = await this.energyRows(this.config.summarizedEnergyTable, channel, window, false, 'summarized', warnings, signal)
-      const single = await this.energyRows(this.config.energyTable, channel, window, true, 'raw', warnings, signal)
+      const summarized = await this.energyRows(this.config.summarizedEnergyTable, channel, window, false, 'summarized', warnings, signal, cap)
+      const single = await this.energyRows(this.config.energyTable, channel, window, true, 'raw', warnings, signal, cap)
       const merged = mergeEnergyPoints(summarized, single)
       if (merged.length === 0) {
         warnings.push(`meter ${channel} has no energy samples`)
@@ -480,6 +488,7 @@ export class NilmTimeseriesService extends Service {
       'raw',
       warnings,
       this.now(),
+      cap.truncated,
     )
     return { buckets, dataQuality, warnings }
   }
@@ -492,6 +501,7 @@ export class NilmTimeseriesService extends Service {
     sourceLabel: string,
     warnings: string[],
     signal?: AbortSignal,
+    cap?: { truncated: boolean },
   ): Promise<Array<{ tsMs: number; energy: number }>> {
     const filter = singlePhase ? " AND wiring_method = 'SGL'" : ''
     const sql = `SELECT ts, energy_value FROM ${identifier(table)}
@@ -499,6 +509,7 @@ export class NilmTimeseriesService extends Service {
       ORDER BY ts LIMIT ${String(this.config.rawPointLimit + 1)}`
     const rows = await this.source.queryHot<Record<string, unknown>>(sql, signal)
     if (rows.length > this.config.rawPointLimit) {
+      if (cap !== undefined) cap.truncated = true
       warnings.push(`meter ${channel} ${sourceLabel} energy rows were capped at ${String(this.config.rawPointLimit)}; totals cover only returned samples`)
     }
     return rows.flatMap(row => {
@@ -517,6 +528,7 @@ export class NilmTimeseriesService extends Service {
   ): Promise<EnergyQueryResult> {
     const warnings: string[] = []
     const buckets: EnergyBucket[] = []
+    let truncated = false
     for (const meter of meterSet) {
       if (meter.pathName === undefined) continue
       const sql = `SELECT ts, statistic_result FROM ${identifier(this.config.dailyStatsTable)}
@@ -524,6 +536,7 @@ export class NilmTimeseriesService extends Service {
         ORDER BY ts LIMIT ${String(this.config.rawPointLimit + 1)}`
       const rows = await this.source.queryStats<Record<string, unknown>>(sql, signal)
       if (rows.length > this.config.rawPointLimit) {
+        truncated = true
         warnings.push(`meter ${meter.pathName ?? (meter.channelId as string)} daily statistics rows were capped at ${String(this.config.rawPointLimit)}; totals cover only returned samples`)
       }
       for (const row of rows) {
@@ -534,8 +547,8 @@ export class NilmTimeseriesService extends Service {
       }
     }
     sortBuckets(buckets)
-    if (buckets.length === 0) return { buckets: [], dataQuality: quality(window, [], bucketWidth(window.startMs, granularity), 'preaggregated', warnings, this.now()), warnings }
-    const dataQuality = quality(window, buckets.map(bucket => bucket.startMs), bucketWidth(window.startMs, granularity), 'preaggregated', warnings, this.now())
+    if (buckets.length === 0) return { buckets: [], dataQuality: quality(window, [], bucketWidth(window.startMs, granularity), 'preaggregated', warnings, this.now(), truncated), warnings }
+    const dataQuality = quality(window, buckets.map(bucket => bucket.startMs), bucketWidth(window.startMs, granularity), 'preaggregated', warnings, this.now(), truncated)
     return { buckets, dataQuality, warnings }
   }
 
@@ -792,6 +805,7 @@ function quality(
   source: NilmDataQuality['source'],
   warnings: string[],
   nowMs: number,
+  truncated = false,
 ): NilmDataQuality {
   const expected = Math.max(1, Math.ceil((window.endMs - window.startMs) / stepMs))
   const unique = [...new Set(observed)].sort((left, right) => left - right)
@@ -804,6 +818,7 @@ function quality(
     gaps: gaps.slice(0, 100).map(gap => ({ start: businessIso(gap.startMs), end: businessIso(gap.endMs), reason: 'missing_samples' })),
     source,
     warnings,
+    ...(truncated ? { truncated: true } : {}),
   }
 }
 

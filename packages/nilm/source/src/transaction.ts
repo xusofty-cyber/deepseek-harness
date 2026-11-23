@@ -79,7 +79,8 @@ export class MysqlTransactionRunner implements SqlTransactionRunner {
       if (!committed) {
         try {
           await connection.rollback()
-        } catch {
+        } catch (rollbackError: unknown) {
+          void rollbackError
           // The transaction is already unusable; the original failure is the actionable cause.
         }
       }

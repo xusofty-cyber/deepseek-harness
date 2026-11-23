@@ -100,11 +100,12 @@ export class MemorySchedulerRepository implements SchedulerRepository {
     const existing = this.reports.find(row =>
       row.tenantId === report.tenantId && row.reportType === report.reportType && row.reportDate === report.reportDate)
     if (existing !== undefined) return { reportId: existing.reportId, inserted: false }
+    const payload: unknown = JSON.parse(report.payloadJson)
     this.reports.push({
       reportId: report.reportId,
       reportType: report.reportType,
       reportDate: report.reportDate,
-      payload: JSON.parse(report.payloadJson) as unknown,
+      payload,
       summaryText: report.summaryText,
       tenantId: report.tenantId,
       draft: report,

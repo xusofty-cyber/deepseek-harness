@@ -6,7 +6,15 @@
  */
 
 import type { NotificationChannel } from '@deepseek-ai/dsh-nilm-sentinel'
+import {
+  assertHttpEndpoint,
+  readBoundedResponseText,
+  ResponseLimitError,
+} from '@deepseek-ai/dsh-nilm-core'
 import { timeoutSignal, type DeliveryFailure, type DeliveryResult, type OutboxTask } from './model.ts'
+
+/** Gateway responses carry only a provider id; larger bodies are ignored. */
+const MAX_GATEWAY_RESPONSE_BYTES = 64 * 1024
 
 /** One channel transport. */
 export interface ChannelTransport {
@@ -54,7 +62,9 @@ export class GatewayChannelTransport implements ChannelTransport {
     private readonly token: string | undefined,
     private readonly fetchImpl: FetchLike = globalThis.fetch,
     private readonly timeoutMs: number = 10_000,
-  ) {}
+  ) {
+    assertHttpEndpoint(endpoint, `${channel} gateway endpoint`)
+  }
 
   /** @param task - claimed Outbox row. @param signal - worker cancellation. @returns provider result. */
   async send(task: OutboxTask, signal?: AbortSignal): Promise<DeliveryResult> {
@@ -75,6 +85,7 @@ export class GatewayChannelTransport implements ChannelTransport {
       headers,
       body,
       signal: timeoutSignal(this.timeoutMs, signal),
+      redirect: 'manual',
     })
     if (!response.ok) {
       const retryable = response.status === 429 || response.status >= 500
@@ -121,6 +132,7 @@ export function buildTransports(
       transports.set(channel, new UnconfiguredChannelTransport(channel))
       continue
     }
+    assertHttpEndpoint(config.endpoint, `${channel} gateway endpoint`)
     transports.set(channel, new GatewayChannelTransport(
       channel,
       config.endpoint,
@@ -140,7 +152,8 @@ export function buildTransports(
  */
 function parsePayload(text: string): unknown {
   try {
-    return JSON.parse(text) as unknown
+    const value: unknown = JSON.parse(text)
+    return value
   } catch {
     throw new DeliveryFailureError({ code: 'invalid_payload', retryable: false })
   }
@@ -152,10 +165,17 @@ function parsePayload(text: string): unknown {
  * @returns the decoded body, or undefined when empty or non-JSON.
  */
 async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text()
+  let text: string
+  try {
+    text = await readBoundedResponseText(response, MAX_GATEWAY_RESPONSE_BYTES)
+  } catch (error) {
+    if (error instanceof ResponseLimitError) return undefined
+    throw error
+  }
   if (text.trim() === '') return undefined
   try {
-    return JSON.parse(text) as unknown
+    const value: unknown = JSON.parse(text)
+    return value
   } catch {
     return undefined
   }

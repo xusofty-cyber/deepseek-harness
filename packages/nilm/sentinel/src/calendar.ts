@@ -92,7 +92,8 @@ function minuteOf(text: string): number {
  */
 function parseJson(text: string): unknown {
   try {
-    return JSON.parse(text) as unknown
+    const value: unknown = JSON.parse(text)
+    return value
   } catch (error) {
     throw new NilmError('INVALID_ARGUMENT', 'work_hours_json is not valid JSON', { cause: error })
   }

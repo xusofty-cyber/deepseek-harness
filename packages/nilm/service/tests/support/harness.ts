@@ -3,7 +3,7 @@ import { expect } from 'vitest'
 import type { CallContext } from '@deepseek-ai/dsh-nilm-core'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { canonicalRequest, createSignature } from '../../src/auth.ts'
-import { resolveConfig } from '../../src/config.ts'
+import { resolveConfig, type ResolvedConfig } from '../../src/config.ts'
 import {
   NilmHttpService,
   type AlertApi,
@@ -30,6 +30,7 @@ let nonceCounter = 0
 export interface ResponseRecord {
   status: number
   body: string
+  headers: OutgoingHttpHeaders
 }
 
 export class FakeRequest implements NilmHttpRequest {
@@ -59,12 +60,14 @@ export class FakeRequest implements NilmHttpRequest {
 export class FakeResponse implements NilmHttpResponse {
   status = 0
   body = ''
+  headers: OutgoingHttpHeaders = {}
   headersSent = false
   writableEnded = false
   destroyed = false
 
-  writeHead(status: number, _headers?: OutgoingHttpHeaders): this {
+  writeHead(status: number, headers?: OutgoingHttpHeaders): this {
     this.status = status
+    this.headers = headers ?? {}
     this.headersSent = true
     return this
   }
@@ -121,6 +124,7 @@ export class FakeSession implements NilmAgentSession {
 export class FakeRuntime implements NilmAgentRuntime {
   readonly sessions = new Map<string, FakeSession>()
   readonly persisted = new Map<string, readonly ChatMessage[]>()
+  readonly released: string[] = []
   opens = 0
   lastContext: CallContext | undefined
   lastMode: TurnMode | undefined
@@ -138,6 +142,11 @@ export class FakeRuntime implements NilmAgentRuntime {
 
   async history(sessionId: string): Promise<readonly ChatMessage[] | undefined> {
     return this.persisted.get(sessionId)
+  }
+
+  async release(sessionId: string): Promise<void> {
+    this.released.push(sessionId)
+    this.sessions.delete(sessionId)
   }
 }
 
@@ -175,7 +184,7 @@ export async function call(
   const req = new FakeRequest(method, path, headers(method, path, body, tenant, secret, extra), body)
   const res = new FakeResponse()
   await service.handleRequest(req, res)
-  return { status: res.status, body: res.body }
+  return { status: res.status, body: res.body, headers: res.headers }
 }
 
 export function openStream(
@@ -188,7 +197,7 @@ export function openStream(
   const body = Buffer.alloc(0)
   const req = new FakeRequest('GET', path, headers('GET', path, body, tenant, secret, extra), body)
   const res = new FakeResponse()
-  const complete = service.handleRequest(req, res).then(() => ({ status: res.status, body: res.body }))
+  const complete = service.handleRequest(req, res).then(() => ({ status: res.status, body: res.body, headers: res.headers }))
   return { complete, abort: () => { req.close() } }
 }
 
@@ -209,7 +218,9 @@ export function parseSse(body: string): Array<{ id?: number; event: string; data
 export function newService(
   runtime: FakeRuntime,
   alerts?: AlertApi,
-  extra: Pick<Partial<NilmHttpServiceOptions>, 'shard' | 'conversations' | 'audit'> = {},
+  extra: Pick<Partial<NilmHttpServiceOptions>, 'shard' | 'conversations' | 'audit' | 'now'> & {
+    config?: Partial<ResolvedConfig>
+  } = {},
 ): NilmHttpService {
   return new NilmHttpService({
     config: resolveConfig({
@@ -221,12 +232,16 @@ export function newService(
       pingIntervalMs: 10_000,
       clockSkewMs: 300_000,
       nonceTtlMs: 600_000,
+      rateLimitPerUserPerMinute: 10_000,
+      ...extra.config,
     }),
     runtime,
     ready: () => true,
-    now: () => NOW,
+    now: extra.now ?? (() => NOW),
     ...(alerts === undefined ? {} : { alerts }),
-    ...extra,
+    ...(extra.shard === undefined ? {} : { shard: extra.shard }),
+    ...(extra.conversations === undefined ? {} : { conversations: extra.conversations }),
+    ...(extra.audit === undefined ? {} : { audit: extra.audit }),
   })
 }
 

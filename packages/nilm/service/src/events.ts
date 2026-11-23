@@ -27,6 +27,8 @@ export interface SseEvent {
 
 /** Internal safety bound for one turn's replay buffer. */
 const MAX_BUFFERED_EVENTS = 20_000
+/** Internal safety bound used when the caller does not supply a byte budget. */
+const DEFAULT_MAX_BUFFERED_BYTES = 8 * 1024 * 1024
 
 /** Buffered event channel for one turn. */
 export class TurnEventBuffer {
@@ -35,16 +37,27 @@ export class TurnEventBuffer {
   private nextId = 1
   private closed = false
   private overflowed = false
+  private bytes = 0
 
   /**
    * @param turnId - turn identity included in overflow diagnostics.
    * @param sessionId - session identity included in the terminal event.
+   * @param maxBytes - byte budget for replay data.
    */
-  constructor(private readonly turnId: string, private readonly sessionId: string) {}
+  constructor(
+    private readonly turnId: string,
+    private readonly sessionId: string,
+    private readonly maxBytes: number = DEFAULT_MAX_BUFFERED_BYTES,
+  ) {}
 
   /** Last event id currently buffered, or 0 before the first event. */
   get lastEventId(): number {
     return this.nextId - 1
+  }
+
+  /** Serialized payload bytes retained for replay. */
+  get bufferedBytes(): number {
+    return this.bytes
   }
 
   /** Whether the terminal event has been appended. */
@@ -56,29 +69,31 @@ export class TurnEventBuffer {
    * Append one event and wake every waiting stream.
    * @param event - SSE event name.
    * @param data - lossless JSON payload.
+   * @param sizeBytes - serialized payload size, when the caller already measured it.
    * @returns the appended event, or undefined after the buffer overflowed.
    */
-  append(event: SseEventType, data: JsonValue): SseEvent | undefined {
+  append(event: SseEventType, data: JsonValue, sizeBytes?: number): SseEvent | undefined {
     if (this.closed || this.overflowed) return undefined
-    if (this.events.length >= MAX_BUFFERED_EVENTS) {
+    const size = sizeBytes ?? Buffer.byteLength(JSON.stringify(data), 'utf8')
+    if (this.events.length >= MAX_BUFFERED_EVENTS || this.bytes + size > this.maxBytes) {
       this.overflowed = true
       const error = this.push('error', {
         turnId: this.turnId,
         code: 'QUERY_LIMIT_EXCEEDED',
         message: 'turn produced too many streaming events; reconnect for the durable answer',
         retryable: false,
-      })
+      }, 0)
       const doneId = this.nextId
       this.push('done', {
         turnId: this.turnId,
         sessionId: this.sessionId,
         lastEventId: String(doneId),
-      })
+      }, 0)
       this.closed = true
       this.notify()
       return error
     }
-    const appended = this.push(event, data)
+    const appended = this.push(event, data, size)
     this.notify()
     return appended
   }
@@ -91,7 +106,7 @@ export class TurnEventBuffer {
       turnId: this.turnId,
       sessionId: this.sessionId,
       lastEventId: String(doneId),
-    })
+    }, 0)
     this.closed = true
     this.notify()
   }
@@ -118,9 +133,10 @@ export class TurnEventBuffer {
     this.notify()
   }
 
-  private push(event: SseEventType, data: JsonValue): SseEvent {
+  private push(event: SseEventType, data: JsonValue, sizeBytes = 0): SseEvent {
     const appended: SseEvent = { id: this.nextId++, event, data }
     this.events.push(appended)
+    this.bytes += sizeBytes
     return appended
   }
 

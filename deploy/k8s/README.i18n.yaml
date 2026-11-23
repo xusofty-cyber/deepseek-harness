@@ -14,9 +14,12 @@
 /nilm-agent-kubernetes-deployment/deploy-order:
   en: 3882a7784bc3582c
   zh: 5c80307770d8c972
+/nilm-agent-kubernetes-deployment/database-accounts:
+  en: 2c362487f23d841e
+  zh: c93ae3b9d1fa759f
 /nilm-agent-kubernetes-deployment/shard-count-and-pvc-topology:
-  en: 66f5c567843f55a7
-  zh: f46b78d383eef592
+  en: 9eac0b2699fe7fcb
+  zh: c405a549c64de713
 /nilm-agent-kubernetes-deployment/tenant-migration-and-drain:
   en: 68c3115145ef1388
   zh: fe6a7a95515d3498

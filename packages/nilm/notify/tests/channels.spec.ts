@@ -35,6 +35,7 @@ describe('gateway channel transport', () => {
 
     expect(captured!.url).toBe('https://gateway.test/send')
     expect(captured!.init.method).toBe('POST')
+    expect(captured!.init.redirect).toBe('manual')
     expect((captured!.init.headers as Record<string, string>).authorization).toBe('Bearer token-1')
     const body = captured!.init.body as string
     expect(body).not.toContain('13800138000')
@@ -82,5 +83,20 @@ describe('gateway channel transport', () => {
     expect(transports.size).toBe(4)
     await expect(transports.get('wecom_webhook')!.send(task({ channel: 'wecom_webhook' })))
       .rejects.toMatchObject({ failure: { code: 'channel_not_configured', retryable: false } })
+  })
+
+  it('ignores a gateway response above the size ceiling', async () => {
+    const transport = new GatewayChannelTransport('sms', 'https://gateway.test/send', undefined,
+      async () => new Response('{'.repeat(70_000), { status: 200 }))
+
+    await expect(transport.send(task())).resolves.toEqual({})
+  })
+
+  it('rejects a configured endpoint that embeds credentials or is not HTTP(S)', () => {
+    expect(() => buildTransports({ sms: { endpoint: 'https://user:secret@gateway.test/sms' } }))
+      .toThrow('must not embed credentials')
+    expect(() => buildTransports({ sms: { endpoint: 'file:///etc/passwd' } })).toThrow('http or https')
+    expect(() => new GatewayChannelTransport('sms', 'file:///etc/passwd', undefined))
+      .toThrow('http or https')
   })
 })

@@ -52,11 +52,12 @@ function setup(options: {
   now: number
   tenants?: TenantSchedule[]
   summaryWriter?: ReportSummaryWriter
+  repository?: MemorySchedulerRepository
   config?: ConstructorParameters<typeof NilmSchedulerService>[1]
 }): { service: NilmSchedulerService; repo: MemorySchedulerRepository; data: FakeSchedulerDataSource } {
   const ctx = new Context()
   contexts.push(ctx)
-  const repo = new MemorySchedulerRepository()
+  const repo = options.repository ?? new MemorySchedulerRepository()
   repo.tenants.push(...(options.tenants ?? [tenant()]))
   const data = new FakeSchedulerDataSource()
   const dependencies: SchedulerDependencies = {
@@ -231,5 +232,37 @@ describe('scheduler jobs', () => {
     seedMorning(data)
     const retried = await service.runJob('morning_report', tenant(), MORNING + 61_000)
     expect(retried.status).toBe('completed')
+  })
+
+  it('continues other tenants when one tenant claim throws', async () => {
+    class FailingClaimRepository extends MemorySchedulerRepository {
+      override async claimJob(input: Parameters<MemorySchedulerRepository['claimJob']>[0]) {
+        if (input.tenantId === 'tenant-a') throw new Error('database lock unavailable')
+        return super.claimJob(input)
+      }
+    }
+    const repository = new FailingClaimRepository()
+    const second = tenant({ tenantId: 'tenant-b', tenantName: '工厂B' })
+    const { service, repo, data } = setup({
+      now: MORNING,
+      tenants: [tenant(), second],
+      repository,
+    })
+    seedMorning(data)
+    data.morning.set('tenant-b', data.morning.get('tenant-a')!)
+
+    const result = await service.runDue(MORNING)
+
+    expect(result.outcomes.filter(outcome => outcome.tenantId === 'tenant-a'))
+      .toEqual([
+        expect.objectContaining({ status: 'failed' }),
+        expect.objectContaining({ status: 'failed' }),
+      ])
+    expect(result.outcomes.filter(outcome => outcome.tenantId === 'tenant-b'))
+      .toEqual([
+        expect.objectContaining({ status: 'completed' }),
+        expect.objectContaining({ status: 'completed' }),
+      ])
+    expect(repo.reports.filter(row => row.tenantId === 'tenant-b')).toHaveLength(1)
   })
 })

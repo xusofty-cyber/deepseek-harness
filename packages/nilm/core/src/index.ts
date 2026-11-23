@@ -31,5 +31,6 @@ export type {
 } from './types.ts'
 export { NilmError, NilmSourceError, NilmToolError, SECURITY_TOOL_FAILURE_CODES } from './errors.ts'
 export type { NilmErrorCode } from './errors.ts'
+export { assertHttpEndpoint, readBoundedResponseText, ResponseLimitError } from './fetch-body.ts'
 export { REDACTED, redactText, redactValue } from './redact.ts'
 export type { SecurityAuditEvent, SecurityAuditSink } from './audit.ts'

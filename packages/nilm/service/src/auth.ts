@@ -35,7 +35,10 @@ export class AuthError extends NilmError {
   }
 }
 
-/** Process-local nonce cache; a multi-replica deployment shares this state through Redis. */
+/**
+ * Process-local nonce cache. Replicas do not share entries; a multi-replica
+ * deployment must inject a shared implementation before relying on global replay protection.
+ */
 export class NonceStore {
   private readonly seen = new Map<string, number>()
 

@@ -161,6 +161,5 @@ function abortFailure(): NilmSourceError {
  * @returns the typed source error.
  */
 export function sourceUnavailable(error: unknown): NilmSourceError {
-  const message = error instanceof Error ? error.message : 'unknown driver failure'
-  return new NilmSourceError('SOURCE_UNAVAILABLE', `source query failed: ${message}`, { cause: error })
+  return new NilmSourceError('SOURCE_UNAVAILABLE', 'source query failed', { cause: error })
 }

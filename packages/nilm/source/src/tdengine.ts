@@ -3,7 +3,15 @@
  * @module @deepseek-ai/dsh-nilm-source/tdengine
  */
 
-import { NilmSourceError } from '@deepseek-ai/dsh-nilm-core'
+import {
+  assertHttpEndpoint,
+  NilmSourceError,
+  readBoundedResponseText,
+  ResponseLimitError,
+} from '@deepseek-ai/dsh-nilm-core'
+
+/** TDengine REST result rows are bounded before JSON parsing. */
+const MAX_TDENGINE_RESPONSE_BYTES = 8 * 1024 * 1024
 
 /** Minimal query surface for one TDengine endpoint. */
 export interface TdengineExecutor {
@@ -44,6 +52,11 @@ export class HttpTdengineExecutor implements TdengineExecutor {
    * @returns rows keyed by `column_meta` names.
    */
   async query<T>(sql: string, signal?: AbortSignal): Promise<T[]> {
+    try {
+      assertHttpEndpoint(this.url, 'TDengine URL')
+    } catch (error) {
+      throw new NilmSourceError('INVALID_SOURCE_CONFIG', error instanceof Error ? error.message : 'TDengine URL is invalid', { cause: error })
+    }
     const timeout = AbortSignal.timeout(this.timeoutMs)
     const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
     let response: Response
@@ -56,6 +69,7 @@ export class HttpTdengineExecutor implements TdengineExecutor {
         },
         body: sql,
         signal: combined,
+        redirect: 'manual',
       })
     } catch (error) {
       if (combined.aborted) {
@@ -71,8 +85,12 @@ export class HttpTdengineExecutor implements TdengineExecutor {
     }
     let payload: TdengineResponse
     try {
-      payload = await response.json() as TdengineResponse
+      const text = await readBoundedResponseText(response, MAX_TDENGINE_RESPONSE_BYTES)
+      payload = JSON.parse(text) as TdengineResponse
     } catch (error) {
+      if (error instanceof ResponseLimitError) {
+        throw new NilmSourceError('SOURCE_UNAVAILABLE', 'TDengine response exceeds the configured size limit', { cause: error })
+      }
       throw new NilmSourceError('SOURCE_UNAVAILABLE', 'TDengine returned invalid JSON', { cause: error })
     }
     if (payload.code !== undefined && payload.code !== 0) {

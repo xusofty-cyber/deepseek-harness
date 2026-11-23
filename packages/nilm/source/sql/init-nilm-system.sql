@@ -43,6 +43,18 @@ CREATE TABLE `nilm_asset_snapshot` (
   KEY `idx_tenant_name` (`tenant_id`, `node_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='五级资产拓扑投影';
 
+CREATE TABLE `nilm_source_tenant_map` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `source_id` VARCHAR(64) NOT NULL COMMENT '上游数据源标识，如 upstream_unsafe',
+  `source_tenant_id` VARCHAR(128) NOT NULL COMMENT '上游租户键',
+  `tenant_id` VARCHAR(64) NOT NULL COMMENT '本项目租户边界',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_source_tenant` (`source_id`, `source_tenant_id`),
+  KEY `idx_source_tenant_target` (`tenant_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上游租户到本项目租户的唯一映射；缺失时 Sentinel 拒绝处理上游记录';
+
 CREATE TABLE `nilm_measurement_binding` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `tenant_id` VARCHAR(64) NOT NULL,
@@ -240,7 +252,8 @@ CREATE TABLE `nilm_notification_record` (
 CREATE TABLE `nilm_sentinel_watermark` (
   `source_name` VARCHAR(64) NOT NULL COMMENT '增量事件源名称，如 upstream_unsafe',
   `record_time` DATETIME NOT NULL COMMENT '已处理记录的事件时间',
-  `record_id` VARCHAR(128) NOT NULL COMMENT '同一事件时间内的稳定排序ID',
+  `record_id` VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '同一事件时间内的稳定排序ID；二进制排序，水位单调比较按字节序',
+  `scan_offset` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '水位线之后已检查的无效时间行数（毒记录前缀），重启续扫用',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`source_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Sentinel 增量扫描水位线';

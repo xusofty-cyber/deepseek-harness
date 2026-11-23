@@ -76,6 +76,14 @@ export interface Config {
   nominalVoltageV?: number
   /** Worker identification written by the notification dispatcher. */
   workerId?: string
+  /** Zero-based StatefulSet shard served by this Pod. */
+  shardIndex?: number
+  /** Total StatefulSet shards. Only shard 0 runs the scanner. */
+  shardCount?: number
+  /** Configured source identity used by `nilm_source_tenant_map`. */
+  sourceId?: string
+  /** Upstream tenant key this deployment reads. */
+  sourceTenantId: string
 }
 
 /** Cordis schema for {@link Config}. */
@@ -89,6 +97,10 @@ export const Config: z<Config> = z.object({
   templates: z.dict(String).default({}),
   nominalVoltageV: z.natural().min(1).default(220),
   workerId: z.string().default('sentinel'),
+  shardIndex: z.natural().default(0),
+  shardCount: z.natural().min(1).default(1),
+  sourceId: z.string().default('upstream_unsafe'),
+  sourceTenantId: z.string().required(),
 })
 
 /** Resolved configuration with defaults applied. */
@@ -102,6 +114,10 @@ export interface ResolvedConfig {
   templates: TemplateIds
   nominalVoltageV: number
   workerId: string
+  shardIndex: number
+  shardCount: number
+  sourceId: string
+  sourceTenantId: string
 }
 
 /** Minimal caller identity accepted by the alert API. */
@@ -192,6 +208,10 @@ interface ProcessContext {
 }
 
 const UNSAFE_SOURCE = 'upstream_unsafe'
+/** Bound diagnostic de-duplication so a poisoned upstream cannot grow memory. */
+const MAX_DIAGNOSTIC_KEYS = 1_024
+/** Maximum batches per scan before yielding to the next poll tick. */
+const MAX_SCAN_BATCHES = 10
 /** Active inspection service. */
 export class NilmSentinelService extends Service {
   /** Cordis configuration schema. */
@@ -208,9 +228,13 @@ export class NilmSentinelService extends Service {
   private readonly powerBuffers = new Map<string, PowerSample[]>()
   private readonly violationBuffers = new Map<string, ViolationSample[]>()
   private readonly missingSignalsLogged = new Set<string>()
+  private readonly badUnsafeRecords = new Set<string>()
+  private readonly ambiguousUnsafeRecords = new Set<string>()
+  private unmappedSourceLogged = false
   private timer: NodeJS.Timeout | undefined
   private scanning = false
   private watermark: Watermark | undefined
+  private scanOffset = 0
   private lastEnergyAtMs = 0
 
   /**
@@ -218,7 +242,7 @@ export class NilmSentinelService extends Service {
    * @param config - deployment configuration.
    * @param dependencies - store, source, and clock overrides.
    */
-  constructor(ctx: Context, config: Config = {}, dependencies: SentinelDependencies = {}) {
+  constructor(ctx: Context, config: Config, dependencies: SentinelDependencies = {}) {
     super(ctx, 'nilmSentinel')
     this.config = resolveConfig(config)
     this.store = dependencies.store ?? new MysqlSentinelStore(() => ctx.get('nilmSource')!)
@@ -234,6 +258,7 @@ export class NilmSentinelService extends Service {
   /** Start the polling loop; the first scan runs immediately. */
   start(): void {
     if (this.timer !== undefined) return
+    if (this.config.shardIndex !== 0) return
     const tick = (): void => {
       if (this.scanning) return
       this.scanning = true
@@ -259,23 +284,50 @@ export class NilmSentinelService extends Service {
    * @returns counts of read rows and inserted alerts.
    */
   async scanOnce(): Promise<{ read: number; inserted: number }> {
+    if (this.config.shardIndex !== 0) return { read: 0, inserted: 0 }
     const nowMs = this.now()
-    await this.ensureWatermark(nowMs)
     const context = await this.processContext()
-    let read = 0
+    const mappedTenantId = await this.resolveMappedTenant()
     let inserted = 0
+    if (mappedTenantId === null) {
+      if (nowMs - this.lastEnergyAtMs >= this.config.energyIntervalMs) {
+        this.lastEnergyAtMs = nowMs
+        inserted += await this.evaluateEnergyRules(context, nowMs)
+      }
+      return { read: 0, inserted }
+    }
+    await this.ensureWatermark(nowMs)
+    let read = 0
     let batches = 0
-    while (batches < 10) {
+    while (batches < MAX_SCAN_BATCHES) {
       batches += 1
-      const rows = await this.unsafe.readAfter(this.watermark!, this.config.batchSize)
+      const rows = await this.unsafe.readAfter(this.watermark!, this.config.batchSize, this.scanOffset)
       if (rows.length === 0) break
       read += rows.length
+      let lastValid: { recordId: string; recordTimeMs: number } | undefined
       for (const row of rows) {
-        inserted += await this.processUnsafeRow(row, context, nowMs)
+        let recordTimeMs: number
+        try {
+          recordTimeMs = toMs(row.recordTime, row.recordId)
+        } catch {
+          this.noteBadUnsafeRecord(row.recordId)
+          continue
+        }
+        lastValid = { recordId: row.recordId, recordTimeMs }
+        inserted += await this.processUnsafeRow(row, context, nowMs, mappedTenantId)
       }
-      const last = rows[rows.length - 1]!
-      this.watermark = { recordTimeMs: toMs(last.recordTime, last.recordId), recordId: last.recordId }
-      await this.store.saveWatermark(UNSAFE_SOURCE, this.watermark)
+      if (lastValid === undefined) {
+        // The watermark only advances across rows with a usable instant. Offset
+        // scanning walks a poison prefix without putting it in query parameters.
+        this.scanOffset += rows.length
+        // Persist the walk so a restart resumes here instead of re-reading the prefix.
+        await this.store.saveWatermark(UNSAFE_SOURCE, { ...this.watermark!, scanOffset: this.scanOffset })
+        if (rows.length < this.config.batchSize) break
+        continue
+      }
+      this.watermark = lastValid
+      this.scanOffset = 0
+      await this.store.saveWatermark(UNSAFE_SOURCE, { ...this.watermark, scanOffset: 0 })
       if (rows.length < this.config.batchSize) break
     }
     if (nowMs - this.lastEnergyAtMs >= this.config.energyIntervalMs) {
@@ -310,12 +362,38 @@ export class NilmSentinelService extends Service {
     if (this.watermark !== undefined) return
     const persisted = await this.store.loadWatermark(UNSAFE_SOURCE)
     if (persisted !== undefined) {
-      this.watermark = persisted
+      this.watermark = { recordTimeMs: persisted.recordTimeMs, recordId: persisted.recordId }
+      this.scanOffset = persisted.scanOffset ?? 0
       return
     }
     const head = await this.unsafe.head()
-    this.watermark = head ?? { recordTimeMs: nowMs, recordId: '' }
+    if (head !== undefined && Number.isFinite(head.recordTimeMs)) {
+      this.watermark = head
+    } else {
+      if (head !== undefined) {
+        this.ctx.logger.warn(redactText(`nilm-sentinel ignored an invalid watermark head ${head.recordId}`))
+      }
+      this.watermark = { recordTimeMs: nowMs, recordId: '' }
+    }
     await this.store.saveWatermark(UNSAFE_SOURCE, this.watermark)
+  }
+
+  /**
+   * @returns configured source tenant's mapped project tenant, or `null` when
+   * the configured source tenant has no mapping.
+   */
+  private async resolveMappedTenant(): Promise<string | null> {
+    const sourceTenantId = this.config.sourceTenantId
+    const tenantId = await this.store.resolveSourceTenant(this.config.sourceId, sourceTenantId)
+    if (tenantId !== undefined) {
+      this.unmappedSourceLogged = false
+      return tenantId
+    }
+    if (!this.unmappedSourceLogged) {
+      this.unmappedSourceLogged = true
+      this.ctx.logger.warn(redactText(`nilm-sentinel rejected source tenant ${sourceTenantId}: no nilm_source_tenant_map row`))
+    }
+    return null
   }
 
   private async processContext(): Promise<ProcessContext> {
@@ -332,12 +410,22 @@ export class NilmSentinelService extends Service {
     return rules
   }
 
-  private async processUnsafeRow(row: UnsafeRecordRow, context: ProcessContext, nowMs: number): Promise<number> {
+  private async processUnsafeRow(
+    row: UnsafeRecordRow,
+    context: ProcessContext,
+    nowMs: number,
+    mappedTenantId: string,
+  ): Promise<number> {
     const classification = classifyUnsafeType(row.unsafeType)
     if (classification === undefined) return 0
     const nodeIds = [row.terminalChannelId, row.assetId].filter((id): id is string => id !== null && id.length > 0)
     if (nodeIds.length === 0) return 0
-    const ownerships = await this.store.resolveScopes(nodeIds)
+    const ownerships = await this.store.resolveScopes(nodeIds, mappedTenantId)
+    const tenantIds = new Set(ownerships.map(ownership => ownership.tenantId))
+    if (tenantIds.size > 1) {
+      this.noteAmbiguousUnsafeRecord(row.recordId)
+      return 0
+    }
     let inserted = 0
     for (const ownership of ownerships) {
       const tenant = context.tenants.get(ownership.tenantId)
@@ -367,6 +455,27 @@ export class NilmSentinelService extends Service {
       inserted += await this.commitCandidate(candidate, tenant, finding.finding, nowMs)
     }
     return inserted
+  }
+
+  /**
+   * Record one poison row as a dead-letter id.
+   * @param recordId - upstream record identity.
+   */
+  private noteBadUnsafeRecord(recordId: string): void {
+    const key = `bad-record:${recordId}`
+    if (!this.badUnsafeRecords.has(key)) {
+      if (this.badUnsafeRecords.size >= MAX_DIAGNOSTIC_KEYS) this.badUnsafeRecords.clear()
+      this.badUnsafeRecords.add(key)
+      this.ctx.logger.warn(redactText(`nilm-sentinel skipped upstream record ${recordId} with an invalid record_time`))
+    }
+  }
+
+  private noteAmbiguousUnsafeRecord(recordId: string): void {
+    const key = `ambiguous-record:${recordId}`
+    if (this.ambiguousUnsafeRecords.has(key)) return
+    if (this.ambiguousUnsafeRecords.size >= MAX_DIAGNOSTIC_KEYS) this.ambiguousUnsafeRecords.clear()
+    this.ambiguousUnsafeRecords.add(key)
+    this.ctx.logger.warn(redactText(`nilm-sentinel skipped upstream record ${recordId}: node maps to multiple tenants`))
   }
 
   private async evaluateEnergyRules(context: ProcessContext, nowMs: number): Promise<number> {
@@ -605,9 +714,14 @@ export class NilmSentinelService extends Service {
  * @param ctx - owning plugin context.
  * @param config - deployment configuration.
  */
-export function apply(ctx: Context, config: Config = {}): void {
+export function apply(ctx: Context, config: Config): void {
+  const resolved = resolveConfig(config)
   const service = new NilmSentinelService(ctx, config)
-  service.start()
+  if (resolved.shardIndex === 0) {
+    service.start()
+  } else {
+    ctx.logger.info(redactText(`nilm-sentinel scanner disabled on shard ${String(resolved.shardIndex)} of ${String(resolved.shardCount)}`))
+  }
 }
 
 /**
@@ -616,6 +730,13 @@ export function apply(ctx: Context, config: Config = {}): void {
  * @returns detached resolved configuration.
  */
 export function resolveConfig(config: Config): ResolvedConfig {
+  const shardIndex = config.shardIndex ?? 0
+  const shardCount = config.shardCount ?? 1
+  if (shardIndex >= shardCount) throw new TypeError('shardIndex must be less than shardCount')
+  const sourceTenantId = config.sourceTenantId?.trim()
+  if (sourceTenantId === undefined || sourceTenantId.length === 0) {
+    throw new TypeError('sourceTenantId is required')
+  }
   return {
     pollIntervalMs: config.pollIntervalMs ?? 5_000,
     energyIntervalMs: config.energyIntervalMs ?? 60_000,
@@ -626,6 +747,10 @@ export function resolveConfig(config: Config): ResolvedConfig {
     templates: { ...config.templates },
     nominalVoltageV: config.nominalVoltageV ?? 220,
     workerId: config.workerId ?? 'sentinel',
+    shardIndex,
+    shardCount,
+    sourceId: config.sourceId ?? 'upstream_unsafe',
+    sourceTenantId,
   }
 }
 

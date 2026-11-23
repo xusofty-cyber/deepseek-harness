@@ -18,6 +18,8 @@ data:
   NILM_SESSION_CWD: /data/sessions
   NILM_SENTINEL_POLL_MS: "5000"
   NILM_SENTINEL_ENERGY_MS: "60000"
+  # Required by nilm-sentinel. Replace with the upstream tenant key before apply.
+  NILM_SOURCE_TENANT_ID: "REPLACE_WITH_UPSTREAM_TENANT_ID"
   NILM_NOTIFY_POLL_MS: "2000"
   NILM_SCHEDULER_TICK_MS: "60000"
   NILM_R08_MIN_COVERAGE: "0.95"

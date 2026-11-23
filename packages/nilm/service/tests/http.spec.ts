@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { NilmError } from '@deepseek-ai/dsh-nilm-core'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { shardForTenant } from '@deepseek-ai/dsh-nilm-sharding'
@@ -36,7 +36,7 @@ class BlockingRuntime extends FakeRuntime {
     return super.open(...args)
   }
 
-  release(): void {
+  unblock(): void {
     this.releaseOpen()
   }
 
@@ -72,6 +72,20 @@ class FailingSendSession extends FakeSession {
 class FailingSendRuntime extends FakeRuntime {
   override async open(...args: Parameters<FakeRuntime['open']>): ReturnType<FakeRuntime['open']> {
     if (!this.sessions.has(args[0])) this.sessions.set(args[0], new FailingSendSession(args[0]))
+    return super.open(...args)
+  }
+}
+
+class FailingFirstSendRuntime extends FakeRuntime {
+  private failFirst = true
+
+  override async open(...args: Parameters<FakeRuntime['open']>): ReturnType<FakeRuntime['open']> {
+    if (!this.sessions.has(args[0])) {
+      const session = new FailingSendSession(args[0])
+      session.failNext = this.failFirst
+      this.failFirst = false
+      this.sessions.set(args[0], session)
+    }
     return super.open(...args)
   }
 }
@@ -226,7 +240,7 @@ describe('NILM BFF HTTP/SSE', () => {
       expect(second.status).toBe(429)
       expect(JSON.parse(second.body)).toMatchObject({ code: 'RATE_LIMITED' })
       expect(second.body).toContain('already being processed')
-      runtime.release()
+      runtime.unblock()
       expect((await first).status).toBe(202)
       expect(runtime.opens).toBe(1)
     } finally {
@@ -261,6 +275,211 @@ describe('NILM BFF HTTP/SSE', () => {
       expect(runtime.opens).toBe(2)
       const session = runtime.sessions.get(conversationId) as FailingSendSession
       expect(session.sent).toEqual(['查询昨日用电'])
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('does not retain an idempotency receipt for a failed send after eviction', async () => {
+    const runtime = new FailingFirstSendRuntime()
+    const service = newService(runtime, undefined, { config: { maxRetainedTurns: 1 } })
+    try {
+      const firstConversation = await createConversation(service)
+      const failedBody = Buffer.from(JSON.stringify({
+        conversationId: firstConversation,
+        clientMessageId: 'client-failed-evicted',
+        content: '查询昨日用电',
+      }))
+      expect((await call(service, 'POST', '/v1/turns', failedBody, TENANT_A, SECRET_A)).status).toBe(500)
+
+      const secondConversation = await createConversation(service)
+      const secondTurn = await createTurn(service, secondConversation, 'client-finished-2')
+      ;(runtime.sessions.get(secondConversation) as FakeSession).emit({ type: 'turn-end', reason: 'completed' })
+      const thirdConversation = await createConversation(service)
+      const thirdTurn = await createTurn(service, thirdConversation, 'client-finished-3')
+      ;(runtime.sessions.get(thirdConversation) as FakeSession).emit({ type: 'turn-end', reason: 'completed' })
+
+      const replay = await call(service, 'POST', '/v1/turns', failedBody, TENANT_A, SECRET_A)
+      expect(replay.status).toBe(202)
+      expect(JSON.parse(replay.body)).toMatchObject({ idempotent: false })
+      expect((JSON.parse(replay.body) as { turnId: string }).turnId).not.toBe(secondTurn)
+      expect((JSON.parse(replay.body) as { turnId: string }).turnId).not.toBe(thirdTurn)
+      expect(runtime.opens).toBe(4)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('returns 429 with Retry-After when one user exceeds the request window', async () => {
+    const service = newService(new FakeRuntime(), undefined, {
+      config: { rateLimitPerUserPerMinute: 1, rateLimitWindowMs: 60_000 },
+    })
+    try {
+      expect((await call(service, 'GET', '/v1/conversations', Buffer.alloc(0), TENANT_A, SECRET_A)).status).toBe(200)
+      const limited = await call(service, 'GET', '/v1/conversations', Buffer.alloc(0), TENANT_A, SECRET_A)
+      expect(limited.status).toBe(429)
+      expect(JSON.parse(limited.body)).toMatchObject({ code: 'RATE_LIMITED' })
+      expect(limited.headers['retry-after']).toBe('60')
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('limits concurrent turns per tenant and releases the slot on turn end', async () => {
+    const runtime = new FakeRuntime()
+    const service = newService(runtime, undefined, { config: { rateLimitTenantConcurrency: 1 } })
+    try {
+      const firstConversation = await createConversation(service)
+      const secondConversation = await createConversation(service)
+      const firstTurn = await createTurn(service, firstConversation, 'client-concurrency-1')
+      const blocked = await call(
+        service,
+        'POST',
+        '/v1/turns',
+        Buffer.from(JSON.stringify({ conversationId: secondConversation, clientMessageId: 'client-concurrency-2', content: '查询昨日用电' })),
+        TENANT_A,
+        SECRET_A,
+      )
+      expect(blocked.status).toBe(429)
+      expect(JSON.parse(blocked.body)).toMatchObject({ code: 'RATE_LIMITED' })
+
+      const firstSession = runtime.sessions.get(firstConversation) as FakeSession
+      firstSession.emit({ type: 'turn-end', reason: 'completed' })
+      const retry = await call(
+        service,
+        'POST',
+        '/v1/turns',
+        Buffer.from(JSON.stringify({ conversationId: secondConversation, clientMessageId: 'client-concurrency-2', content: '查询昨日用电' })),
+        TENANT_A,
+        SECRET_A,
+      )
+      expect(retry.status).toBe(202)
+      expect(firstTurn).not.toBe((JSON.parse(retry.body) as { turnId: string }).turnId)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('evicts an old replay buffer but keeps its idempotency receipt', async () => {
+    const runtime = new FakeRuntime()
+    const service = newService(runtime, undefined, { config: { maxRetainedTurns: 1 } })
+    try {
+      const conversations = await Promise.all([
+        createConversation(service),
+        createConversation(service),
+        createConversation(service),
+      ])
+      const firstBody = Buffer.from(JSON.stringify({
+        conversationId: conversations[0],
+        clientMessageId: 'client-evicted',
+        content: '查询昨日用电',
+      }))
+      const first = await call(service, 'POST', '/v1/turns', firstBody, TENANT_A, SECRET_A)
+      const firstTurn = (JSON.parse(first.body) as { turnId: string }).turnId
+      ;(runtime.sessions.get(conversations[0]!) as FakeSession).emit({ type: 'turn-end', reason: 'completed' })
+
+      const second = await createTurn(service, conversations[1]!, 'client-retained-2')
+      ;(runtime.sessions.get(conversations[1]!) as FakeSession).emit({ type: 'turn-end', reason: 'completed' })
+      await createTurn(service, conversations[2]!, 'client-retained-3')
+      expect(second).not.toBe(firstTurn)
+
+      const gone = await call(service, 'GET', `/v1/turns/${firstTurn}/stream`, Buffer.alloc(0), TENANT_A, SECRET_A)
+      expect(gone.status).toBe(404)
+      const replay = await call(service, 'POST', '/v1/turns', firstBody, TENANT_A, SECRET_A)
+      expect(replay.status).toBe(202)
+      expect(JSON.parse(replay.body)).toMatchObject({ turnId: firstTurn, idempotent: true })
+      expect(runtime.opens).toBe(3)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('bounds the conversation cache without hiding persisted conversations or breaking continuation', async () => {
+    const service = newService(new FakeRuntime(), undefined, { config: { conversationCacheSize: 1 } })
+    try {
+      const first = await createConversation(service)
+      const second = await createConversation(service)
+      const listed = await call(service, 'GET', '/v1/conversations', Buffer.alloc(0), TENANT_A, SECRET_A)
+      const ids = (JSON.parse(listed.body) as { conversations: Array<{ conversationId: string }> })
+        .conversations.map(item => item.conversationId)
+      expect(ids).toEqual(expect.arrayContaining([first, second]))
+      const turn = await call(
+        service,
+        'POST',
+        '/v1/turns',
+        Buffer.from(JSON.stringify({ conversationId: first, clientMessageId: 'client-after-cache', content: '查询昨日用电' })),
+        TENANT_A,
+        SECRET_A,
+      )
+      expect(turn.status).toBe(202)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('releases an idle live session after the configured TTL', async () => {
+    let now = NOW
+    const runtime = new FakeRuntime()
+    const service = newService(runtime, undefined, {
+      now: () => now,
+      config: { sessionIdleTtlMs: 5 },
+    })
+    try {
+      const conversationId = await createConversation(service)
+      await createTurn(service, conversationId, 'client-idle')
+      ;(runtime.sessions.get(conversationId) as FakeSession).emit({ type: 'turn-end', reason: 'completed' })
+      now += 100
+      await new Promise(resolve => setTimeout(resolve, 30))
+      expect(runtime.released).toContain(conversationId)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('sweeps an idle live session on maintenance before its per-conversation timer fires', async () => {
+    vi.useFakeTimers()
+    let now = NOW
+    const runtime = new FakeRuntime()
+    const service = newService(runtime, undefined, {
+      now: () => now,
+      config: { sessionIdleTtlMs: 10_000, maintenanceIntervalMs: 1_000 },
+    })
+    try {
+      const conversationId = await createConversation(service)
+      await createTurn(service, conversationId, 'client-swept')
+      ;(runtime.sessions.get(conversationId) as FakeSession).emit({ type: 'turn-end', reason: 'completed' })
+      now += 100_000
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(runtime.released).toContain(conversationId)
+    } finally {
+      await service.close()
+      vi.useRealTimers()
+    }
+  })
+
+  it('enforces the 64-character clientMessageId bound', async () => {
+    const service = newService(new FakeRuntime())
+    try {
+      const conversationId = await createConversation(service)
+      const accepted = await call(
+        service,
+        'POST',
+        '/v1/turns',
+        Buffer.from(JSON.stringify({ conversationId, clientMessageId: 'a'.repeat(64), content: '查询昨日用电' })),
+        TENANT_A,
+        SECRET_A,
+      )
+      expect(accepted.status).toBe(202)
+      const rejected = await call(
+        service,
+        'POST',
+        '/v1/turns',
+        Buffer.from(JSON.stringify({ conversationId, clientMessageId: 'a'.repeat(65), content: '查询昨日用电' })),
+        TENANT_A,
+        SECRET_A,
+      )
+      expect(rejected.status).toBe(400)
+      expect(rejected.body).toContain('at most 64 characters')
     } finally {
       await service.close()
     }
@@ -383,6 +602,23 @@ describe('NILM BFF shard ownership', () => {
       expect(audited).toContainEqual(expect.objectContaining({ type: 'tenant-shard-mismatch', tenantId: TENANT_A }))
       const health = await call(service, 'GET', '/healthz', Buffer.alloc(0), '', '')
       expect(health.status).toBe(200)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it('rejects a wrong shard before consuming the user rate window', async () => {
+    const expected = shardForTenant(TENANT_A, 8)
+    const wrong = (expected + 1) % 8
+    const service = newService(new FakeRuntime(), undefined, {
+      shard: { index: wrong, count: 8 },
+      config: { rateLimitPerUserPerMinute: 1 },
+    })
+    try {
+      const first = await call(service, 'POST', '/v1/conversations', Buffer.from('{}'), TENANT_A, SECRET_A)
+      const second = await call(service, 'POST', '/v1/conversations', Buffer.from('{}'), TENANT_A, SECRET_A)
+      expect(first.status).toBe(403)
+      expect(second.status).toBe(403)
     } finally {
       await service.close()
     }

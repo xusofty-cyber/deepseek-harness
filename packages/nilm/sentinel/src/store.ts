@@ -57,6 +57,12 @@ export interface Watermark {
   recordTimeMs: number
   /** Stable tie-breaker inside one instant. */
   recordId: string
+  /**
+   * Rows already examined after this point without a usable instant (poison
+   * prefix). Persisted so a restart resumes the walk instead of rescanning it.
+   * Absent means `0`.
+   */
+  scanOffset?: number
 }
 
 /** One enabled tenant rule row. */
@@ -258,8 +264,18 @@ export interface SentinelStore {
   listTenants(): Promise<TenantPolicy[]>
   /** @param tenantId - tenant boundary. @returns enabled rule rows. */
   listRules(tenantId: string): Promise<AlertRuleRow[]>
-  /** @param nodeIds - upstream node identifiers. @returns tenant ownership rows. */
-  resolveScopes(nodeIds: readonly string[]): Promise<ScopeOwnership[]>
+  /**
+   * @param sourceId - configured upstream source identity.
+   * @param sourceTenantId - upstream tenant key carried by that source.
+   * @returns the single project tenant mapped to the source tenant, or undefined when unmapped.
+   */
+  resolveSourceTenant(sourceId: string, sourceTenantId: string): Promise<string | undefined>
+  /**
+   * @param nodeIds - upstream node identifiers.
+   * @param tenantId - optional mapped tenant that bounds the lookup.
+   * @returns tenant ownership rows.
+   */
+  resolveScopes(nodeIds: readonly string[], tenantId?: string): Promise<ScopeOwnership[]>
   /**
    * @param tenantId - tenant boundary.
    * @param silenceKey - cross-window key.
@@ -299,25 +315,46 @@ export class MysqlSentinelStore implements SentinelStore {
 
   /** @param sourceName - incremental source identity. @returns the persisted resume point. */
   async loadWatermark(sourceName: string): Promise<Watermark | undefined> {
-    const rows = await this.database().queryLocalReadOnly<{ recordTime: string | Date; recordId: string }>(
-      `SELECT record_time AS recordTime, record_id AS recordId
+    const rows = await this.database().queryLocalReadOnly<{ recordTime: string | Date; recordId: string; scanOffset: number | string | null }>(
+      `SELECT record_time AS recordTime, record_id AS recordId, scan_offset AS scanOffset
          FROM nilm_sentinel_watermark
         WHERE source_name = ?`,
       [sourceName],
     )
     const row = rows[0]
     if (row === undefined) return undefined
-    return { recordTimeMs: dateMs(row.recordTime), recordId: row.recordId }
+    const scanOffset = Number(row.scanOffset ?? 0)
+    return {
+      recordTimeMs: dateMs(row.recordTime),
+      recordId: row.recordId,
+      scanOffset: Number.isSafeInteger(scanOffset) && scanOffset > 0 ? scanOffset : 0,
+    }
   }
 
   /** @param sourceName - incremental source identity. @param watermark - last processed record. */
   async saveWatermark(sourceName: string, watermark: Watermark): Promise<void> {
+    const time = new Date(watermark.recordTimeMs)
+    const id = watermark.recordId
+    const offset = clampScanOffset(watermark.scanOffset)
+    // Bound parameters replace the VALUES() function, deprecated since MySQL 8.0.20.
+    // MySQL evaluates these assignments left to right against the updated row, so
+    // scan_offset must be decided before record_id/record_time move.
+    const advances = '(? > record_time OR (? = record_time AND ? > record_id))'
     await this.database().transaction(async tx => {
       await tx.query(
-        `INSERT INTO nilm_sentinel_watermark (source_name, record_time, record_id)
-         VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE record_time = VALUES(record_time), record_id = VALUES(record_id)`,
-        [sourceName, new Date(watermark.recordTimeMs), watermark.recordId],
+        `INSERT INTO nilm_sentinel_watermark (source_name, record_time, record_id, scan_offset)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           scan_offset = IF(${advances}, ?,
+             IF(? = record_time AND ? = record_id AND ? > scan_offset, ?, scan_offset)),
+           record_id = IF(${advances}, ?, record_id),
+           record_time = IF(${advances}, ?, record_time)`,
+        [
+          sourceName, time, id, offset,
+          time, time, id, offset, time, id, offset, offset,
+          time, time, id, id,
+          time, time, id, time,
+        ],
       )
     })
   }
@@ -390,8 +427,29 @@ export class MysqlSentinelStore implements SentinelStore {
     })
   }
 
-  /** @param nodeIds - upstream node identifiers. @returns tenant ownership rows. */
-  async resolveScopes(nodeIds: readonly string[]): Promise<ScopeOwnership[]> {
+  /**
+   * @param sourceId - configured upstream source identity.
+   * @param sourceTenantId - upstream tenant key carried by that source.
+   * @returns the single project tenant mapped to the source tenant, or undefined when unmapped.
+   */
+  async resolveSourceTenant(sourceId: string, sourceTenantId: string): Promise<string | undefined> {
+    const rows = await this.database().queryLocalReadOnly<{ tenantId: string }>(
+      `SELECT tenant_id AS tenantId
+         FROM nilm_source_tenant_map
+        WHERE source_id = ? AND source_tenant_id = ?
+        LIMIT 2`,
+      [sourceId, sourceTenantId],
+    )
+    if (rows.length > 1) throw new NilmError('AMBIGUOUS_SCOPE', 'source tenant maps to multiple project tenants')
+    return rows[0]?.tenantId
+  }
+
+  /**
+   * @param nodeIds - upstream node identifiers.
+   * @param tenantId - optional mapped tenant that bounds the lookup.
+   * @returns tenant ownership rows.
+   */
+  async resolveScopes(nodeIds: readonly string[], tenantId?: string): Promise<ScopeOwnership[]> {
     const unique = [...new Set(nodeIds.filter(id => id.length > 0))]
     if (unique.length === 0) return []
     if (unique.length > 500) throw new NilmError('INVALID_ARGUMENT', 'scope resolution exceeds 500 identifiers')
@@ -406,8 +464,8 @@ export class MysqlSentinelStore implements SentinelStore {
       `SELECT tenant_id AS tenantId, level, node_id AS nodeId, node_name AS nodeName,
               rated_power_kw AS ratedPowerKw
          FROM nilm_asset_snapshot
-        WHERE is_active = 1 AND node_id IN (${placeholders})`,
-      unique,
+        WHERE is_active = 1 AND node_id IN (${placeholders})${tenantId === undefined ? '' : ' AND tenant_id = ?'}`,
+      tenantId === undefined ? unique : [...unique, tenantId],
     )
     return rows.map(row => ({
       tenantId: row.tenantId,
@@ -452,8 +510,8 @@ export class MysqlSentinelStore implements SentinelStore {
     const rows = await this.database().queryLocalReadOnly<{ sentAt: string | Date | null }>(
       `SELECT MAX(sent_at) AS sentAt
          FROM nilm_notification_outbox
-        WHERE tenant_id = ? AND status = 'sent' AND dedupe_key LIKE ?`,
-      [tenantId, `${escapeLike(silenceKey)}:%`],
+        WHERE tenant_id = ? AND status = ? AND dedupe_key LIKE ?`,
+      [tenantId, 'sent', `${escapeLike(silenceKey)}:%`],
     )
     const sentAt = rows[0]?.sentAt
     if (sentAt === undefined || sentAt === null) return undefined
@@ -649,7 +707,8 @@ function dateMs(value: string | Date): number {
 function decodeJson(value: unknown): unknown {
   if (typeof value !== 'string') return value
   try {
-    return JSON.parse(value) as unknown
+    const decoded: unknown = JSON.parse(value)
+    return decoded
   } catch {
     return undefined
   }
@@ -703,4 +762,13 @@ function isDuplicateKey(error: unknown): boolean {
     current = record.cause
   }
   return false
+}
+
+/** Largest value `nilm_sentinel_watermark.scan_offset` (INT UNSIGNED) can hold. */
+const MAX_SCAN_OFFSET = 4_294_967_295
+
+/** @param value - requested poison-prefix offset. @returns a non-negative integer within the column range. */
+function clampScanOffset(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return 0
+  return Math.min(Math.floor(value), MAX_SCAN_OFFSET)
 }

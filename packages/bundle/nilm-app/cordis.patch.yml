@@ -117,6 +117,9 @@
         maxAttempts: !!js Number(process.env.NILM_NOTIFY_MAX_ATTEMPTS ?? 5)
         templates: !!js JSON.parse(process.env.NILM_ALERT_TEMPLATES ?? '{}')
         nominalVoltageV: !!js Number(process.env.NILM_SENTINEL_NOMINAL_VOLTAGE ?? 220)
+        sourceTenantId: !!js process.env.NILM_SOURCE_TENANT_ID
+        shardIndex: !!js Number(process.env.NILM_SHARD_INDEX ?? process.env.NILM_POD_NAME?.split('-').at(-1) ?? 0)
+        shardCount: !!js Number(process.env.NILM_SHARD_COUNT ?? 1)
 
     - id: nilm-notify
       name: '@deepseek-ai/dsh-nilm-notify'
@@ -177,6 +180,17 @@
         signingSecrets: !!js JSON.parse(process.env.NILM_SIGNING_SECRETS ?? '{}')
         auditQueueSize: !!js Number(process.env.NILM_AUDIT_QUEUE_SIZE ?? 1024)
         auditBatchSize: !!js Number(process.env.NILM_AUDIT_BATCH_SIZE ?? 64)
+        turnRetentionMs: !!js Number(process.env.NILM_TURN_RETENTION_MS ?? 600000)
+        maxRetainedTurns: !!js Number(process.env.NILM_MAX_RETAINED_TURNS ?? 1024)
+        maxRetainedTurnBytes: !!js Number(process.env.NILM_MAX_RETAINED_TURN_BYTES ?? 67108864)
+        maxTurnBufferBytes: !!js Number(process.env.NILM_MAX_TURN_BUFFER_BYTES ?? 8388608)
+        sessionIdleTtlMs: !!js Number(process.env.NILM_SESSION_IDLE_TTL_MS ?? 900000)
+        conversationCacheSize: !!js Number(process.env.NILM_CONVERSATION_CACHE_SIZE ?? 4096)
+        maxIdempotencyEntries: !!js Number(process.env.NILM_MAX_IDEMPOTENCY_ENTRIES ?? 10000)
+        maintenanceIntervalMs: !!js Number(process.env.NILM_MAINTENANCE_INTERVAL_MS ?? 60000)
+        rateLimitPerUserPerMinute: !!js Number(process.env.NILM_RATE_USER_PER_MINUTE ?? 10)
+        rateLimitTenantConcurrency: !!js Number(process.env.NILM_RATE_TENANT_CONCURRENCY ?? 20)
+        rateLimitWindowMs: !!js Number(process.env.NILM_RATE_WINDOW_MS ?? 60000)
 
     # Runs last: the registered tool surface may contain only nilm_* tools.
     # Any shell, file, web, MCP, or subagent
