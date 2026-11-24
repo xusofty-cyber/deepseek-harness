@@ -13,7 +13,7 @@
   - [阶段 3：主动巡检引擎与可靠通知投递](nilm-ai-agent-detailed-design-phase3.md)
   - [阶段 4：报告调度、租户分片、压测与安全验收](nilm-ai-agent-detailed-design-phase4.md)
 
-本文档是当前可执行测试的清单与证据门映射，不替代开发计划中的现场验收。计数来自 2026-11-23 的 Vitest JSON：**49 个测试文件、485 个断言**；日常套件 48 个文件、483 个断言全部通过；`recovery.spec.ts` 的 2 个断言中 1 个通过、1 个因缺少原生 flock 跳过。
+本文档是当前可执行测试的清单与证据门映射，不替代开发计划中的现场验收。计数来自 2026-11-24 的 Vitest JSON：**49 个测试文件、519 个断言**；日常套件 48 个文件、517 个断言全部通过；`recovery.spec.ts` 的 2 个断言中 1 个通过、1 个因缺少原生 flock 跳过。
 
 阅读约定：用例标题直接复制当前 `it()` 标题；文件级“覆盖”是摘要，逐条断言语义以标题和测试代码为准；“现场待验”表示离线用例不能替代的环境证据。
 
@@ -21,12 +21,12 @@
 
 | 阶段 | 文件数 | 断言数 | 说明 |
 | :--- | ---: | ---: | :--- |
-| 阶段 0 | 14 | 127 | 核心类型、有界 HTTP 读取、上下文、数据源、存储驱动、Bundle/守卫 |
+| 阶段 0 | 14 | 156 | 核心类型、有界 HTTP 读取、上下文、数据源、存储驱动、Bundle/守卫 |
 | 阶段 1 | 9 | 116 | 资产、时序、安全记录、提示词、Tool、BFF、电价/分析 |
 | 阶段 2 | 2 | 33 | 电能质量与 CUSUM |
-| 阶段 3 | 10 | 82 | Sentinel 与 Notify |
-| 阶段 4 | 14 | 127 | 调度、分片、恢复、压测与安全审计 |
-| **合计** | **49** | **485** | 日常 483 + recovery 2（1 skip） |
+| 阶段 3 | 10 | 86 | Sentinel 与 Notify |
+| 阶段 4 | 14 | 128 | 调度、分片、恢复、压测与安全审计 |
+| **合计** | **49** | **519** | 日常 517 + recovery 2（1 skip） |
 
 ## 2. 阶段 0：基础设施、数据源与生产沙箱
 
@@ -73,12 +73,13 @@
 - `rejects an invalid port`
 - `keeps optional TDengine credentials when both are supplied`
 
-**`packages/nilm/source/tests/ddl.spec.ts`** — 2 个断言（2 通过）。覆盖：解析初始化 SQL，验证 19 张设计表、上游租户映射唯一键与租户查询索引。
+**`packages/nilm/source/tests/ddl.spec.ts`** — 3 个断言（3 通过）。覆盖：解析初始化 SQL，验证 19 张设计表、上游租户映射唯一键与租户查询索引，以及 Sentinel 水位 `record_time` 为 `DATETIME(3)` 毫秒精度。
 
 - `creates exactly the nineteen design tables`
 - `keeps tenant-scoped lookup indexes on the conversational tables`
+- `stores the sentinel watermark time with millisecond precision`
 
-**`packages/nilm/source/tests/sql-guard.spec.ts`** — 46 个断言（46 通过）。覆盖：单条参数化 SELECT、子句内逗号、`(SELECT ...)` 派生表与 `information_schema.tables` 限定名放行；写语句、多语句、注释、字面量、非白名单表、空查询拒绝；FROM 与子查询/`UNION` 分支内顶层逗号连接、`STRAIGHT_JOIN`、括号表名、`` `a`.`b` `` 限定名后段、双引号标识符、未闭合反引号与括号不配对均拒绝；MySQL 8.0.19+ `TABLE t` / `VALUES ROW(...)` 查询表达式拒绝；`LOAD_FILE`、`GET_LOCK`/`RELEASE_LOCK`、`INTO @var`、`@var` 与 `@@sysvar` 拒绝；反引号包裹的危险函数名（`` `SLEEP`( ``、`` `BENCHMARK`( ``、`` `GET_LOCK`( ``、`` `load_file`( ``）、函数名与括号间换行、`FOR SHARE`、`NOWAIT`、`SKIP LOCKED`、`INTO OUTFILE`、`SOURCE_POS_WAIT`/`MASTER_POS_WAIT`/`WAIT_FOR_EXECUTED_GTID_SET` 拒绝；关键字只检查裸词，反引号列名/别名 `` `values` ``、`` `table` `` 放行；无表探活豁免收紧为整句 `SELECT 1` / `SELECT ?`，`SELECT 1, USER(), ...` 等拒绝。
+**`packages/nilm/source/tests/sql-guard.spec.ts`** — 74 个断言（74 通过）。覆盖：CTE 名仅在其作用域内（后续 CTE 体、主查询及其子查询）解析为 CTE，每个 CTE 体仍查白名单，`FROM (WITH ...)`、`INTERSECT (WITH ...)`、`WHERE ... IN (SELECT ... FROM cte)` 与 `GROUP BY ... WITH ROLLUP` 放行；CTE 体内引用自身/后续同名、大小写不同、库名限定、CTE 后接逗号连接、`WITH RECURSIVE`、CTE 体非裸 SELECT 均拒绝；`SELECT STRAIGHT_JOIN` 修饰符放行而真 `STRAIGHT_JOIN` 仍查白名单；非派生表后接列清单（`FROM t intersect (secret)`、`AS except (secret)`）拒绝；`WINDOW` 子句逗号后须为 `name AS (` 窗口定义，否则拒绝；`PROCEDURE` 子句拒绝；多窗口定义合法放行；单条参数化 SELECT、子句内逗号、`(SELECT ...)` 派生表与 `information_schema.tables` 限定名放行；写语句、多语句、注释、字面量、非白名单表、空查询拒绝；FROM 与子查询/`UNION` 分支内顶层逗号连接、`STRAIGHT_JOIN`、括号表名与 `((SELECT ...) s, t)` 括号表引用列表、`` `a`.`b` `` 限定名后段、双引号标识符、未闭合反引号与括号不配对均拒绝；MySQL 8.0.19+ `TABLE t` / `VALUES ROW(...)` 查询表达式拒绝；`LOAD_FILE`、`GET_LOCK`/`RELEASE_LOCK`、`INTO @var`、`@var` 与 `@@sysvar` 拒绝；反引号包裹的危险函数名（`` `SLEEP`( ``、`` `BENCHMARK`( ``、`` `GET_LOCK`( ``、`` `load_file`( ``）、函数名与括号间换行、`FOR SHARE`、`NOWAIT`、`SKIP LOCKED`、`INTO OUTFILE`、`SOURCE_POS_WAIT`/`MASTER_POS_WAIT`/`WAIT_FOR_EXECUTED_GTID_SET` 拒绝；关键字只检查裸词，反引号列名/别名 `` `values` ``、`` `table` `` 放行；无表探活豁免收紧为整句 `SELECT 1` / `SELECT ?`，`SELECT 1, USER(), ...` 等拒绝；以 `INTERSECT`/`EXCEPT`/`WINDOW` 作表别名后接逗号（含 `AS` 与子查询变体）拒绝，派生表别名后接列清单（`intersect (c), t`、`AS except (c), t`、`except(c),t`、`AS window (c), t`）同样拒绝；三者仅在运算符形态（后跟 `SELECT`/`ALL`/`DISTINCT`/`(SELECT`/`(WITH`/`((`，或 `WINDOW w AS (`）且前一词不是 `AS` 时结束 FROM，`INTERSECT (SELECT ...)`、`EXCEPT ((SELECT ...))` 放行。
 
 - `accepts one parameterized SELECT over whitelisted tables`
 - `rejects write statement INSERT INTO nilm_tenant_config VALUES (?)`
@@ -94,6 +95,7 @@
 - `rejects table-source bypass SELECT * FROM nilm_tenant_config straight_join secret_table`
 - `rejects table-source bypass SELECT * FROM nilm_tenant_config JOIN (secret_table)`
 - `rejects table-source bypass SELECT * FROM nilm_tenant_config JOIN ((nilm_asset_snapshot, secret_table))`
+- `rejects table-source bypass SELECT * FROM ((SELECT tenant_id FROM nilm_tenant_config) s, secret_table)`
 - `rejects table-source bypass SELECT * FROM `nilm_tenant_config`.`secret_table``
 - `rejects table-source bypass SELECT * FROM nilm_tenant_config WHERE tenant_id IN (SELECT tenant_id FROM nilm_asset_snapshot, secret_table)`
 - `rejects table-source bypass SELECT * FROM nilm_tenant_config UNION SELECT * FROM nilm_asset_snapshot, secret_table`
@@ -411,7 +413,7 @@
 - `rejects resurrection of a final state`
 - `keeps the most urgent value`
 
-**`packages/nilm/sentinel/tests/scanner.spec.ts`** — 19 个断言（19 通过）。覆盖：水位线 bootstrap 的无效 head 防护；事件与 Outbox 单次写入；按接收人入队；bucket 去重；静默抑制；安全告警绕过静默；未知类型不猜测；必填来源租户映射与映射缺失不推进水位；双租户同 node 的映射交付；毒时间戳隔离与偏移推进；重启后从持久化偏移续扫毒记录前缀；全无效批次不推进水位且不永久阻塞；非零分片不扫描；分片配置校验；告警列表/ack。
+**`packages/nilm/sentinel/tests/scanner.spec.ts`** — 23 个断言（23 通过）。覆盖：仅确定性错误（`INVALID_ARGUMENT`/`TypeError` 等）计入死信，本地库持续不可用时不跳行、水位不越过；水位线 bootstrap 的无效 head 防护；事件与 Outbox 单次写入；按接收人入队；bucket 去重；静默抑制；安全告警绕过静默；未知类型不猜测；必填来源租户映射与映射缺失不推进水位；双租户同 node 的映射交付；毒时间戳隔离与偏移推进；重启后从持久化偏移续扫毒记录前缀；全无效批次不推进水位且不永久阻塞；单行处理持续抛错时保留已处理前缀水位、重试 3 次后死信跳过，瞬时失败重试不丢行；保存前缀水位失败时仍抛出原始处理错误；非零分片不扫描；分片配置校验；告警列表/ack。
 
 - `bootstraps the watermark at the current head without replaying history`
 - `writes the alert event and Outbox in one store call and emits the enrich payload`
@@ -535,7 +537,7 @@
 - `enqueues outbox rows and truncates operational audit text`
 - `reads the latest report and decodes stored JSON`
 
-**`packages/nilm/scheduler/tests/scheduler.spec.ts`** — 12 个断言（12 通过）。覆盖：配置加载校验；幂等晨报与逐接收人 Outbox；R-08/R-07 合并扫描；时间窗/预测日；失败不臆造策略；模型失败/空白/超时回退确定性摘要；无接收人成功；失败延迟重试。
+**`packages/nilm/scheduler/tests/scheduler.spec.ts`** — 13 个断言（13 通过）。覆盖：配置加载校验；幂等晨报与逐接收人 Outbox；R-08/R-07 合并扫描；时间窗/预测日；失败不臆造策略；模型失败/空白/超时回退确定性摘要；无接收人成功；失败延迟重试；单租户 claim 抛错或 `failJob` 抛错均不中断后续租户。
 
 - `rejects unknown report channels and templates at configuration load`
 - `generates and delivers an idempotent morning report`
@@ -715,8 +717,8 @@
 
 | 证据门 | 要求 | 离线证据 | 状态 | 命令 |
 | :--- | :--- | :--- | :--- | :--- |
-| **G0-1** | 真实 MySQL/TDengine 连接与超表可读 | `source/tests` 104 断言（mock） | 离线 mock 通过；真实网络握手待验 | `pnpm exec vitest run packages/nilm/source/tests` |
-| **G0-2** | 只读账号 + SELECT 白名单，写操作 0 成功 | `sql-guard.spec.ts` 46 + `production-sql.spec.ts` 27 = 73 断言 | 离线拦截通过；上游只读账号待验 | `pnpm exec vitest run packages/nilm/source/tests/sql-guard.spec.ts packages/nilm/source/tests/production-sql.spec.ts` |
+| **G0-1** | 真实 MySQL/TDengine 连接与超表可读 | `source/tests` 133 断言（mock） | 离线 mock 通过；真实网络握手待验 | `pnpm exec vitest run packages/nilm/source/tests` |
+| **G0-2** | 只读账号 + SELECT 白名单，写操作 0 成功 | `sql-guard.spec.ts` 74 + `production-sql.spec.ts` 27 = 101 断言 | 离线拦截通过；上游只读账号待验 | `pnpm exec vitest run packages/nilm/source/tests/sql-guard.spec.ts packages/nilm/source/tests/production-sql.spec.ts` |
 | **G0-3** | 生产 Profile 无危险工具，移除 3 个扩展包 | `bundle.spec.ts` 5 + `guard.spec.ts` 2 | 离线通过 | `pnpm exec vitest run packages/bundle/nilm-app/tests` |
 | **G0-4** | 假模型进程启动、最小 SDK 调用、SIGTERM 干净退出 | 无自动化用例；`bundle.spec.ts` 不启动进程 | **现场待验** | 按 `pnpm dsh --profile nilm` 执行并留存日志（见开发计划 G0-4） |
 | **G1-1** | 电量/电费/工况纯函数覆盖 | `analytics.spec.ts` 21 + `tariff.spec.ts` 16 = 37 | 离线通过 | `pnpm exec vitest run packages/nilm/analytics/tests/analytics.spec.ts packages/nilm/tariff/tests/tariff.spec.ts` |
@@ -727,7 +729,7 @@
 | **G2-2** | 4 小时秒级分析 p95 <2.5s，事实 <4KB | `cusum.spec.ts` 性能用例 | 离线通过 | `pnpm test:perf:timeseries` |
 | **G2-3** | 四类微观隐患识别 | `cusum.spec.ts` 4 个隐患用例 | 算法离线通过；现场准确率待验 | `pnpm exec vitest run packages/nilm/analytics/tests/cusum.spec.ts -t "diagnoseMicroHazards"` |
 | **G2-4** | ChartSpec v1 波形/标注契约 | `tools.spec.ts` 图表标注用例 | 离线通过 | `pnpm exec vitest run packages/nilm/tools/tests/tools.spec.ts -t "chart annotations"` |
-| **G3-1** | 30 秒安全告警全链路 SLO（5 秒扫描 + R-01~R-05） | `scanner.spec.ts` 19 + `rules.spec.ts` 13 = 32 | 规则离线通过；端到端 SLO 待验 | `pnpm exec vitest run packages/nilm/sentinel/tests/scanner.spec.ts packages/nilm/sentinel/tests/rules.spec.ts` |
+| **G3-1** | 30 秒安全告警全链路 SLO（5 秒扫描 + R-01~R-05） | `scanner.spec.ts` 23 + `rules.spec.ts` 13 = 36 | 规则离线通过；端到端 SLO 待验 | `pnpm exec vitest run packages/nilm/sentinel/tests/scanner.spec.ts packages/nilm/sentinel/tests/rules.spec.ts` |
 | **G3-2** | 去重抑制与多周期升级 | `model.spec.ts` 8 + `suppression.spec.ts` 6 = 14 | 离线通过 | `pnpm exec vitest run packages/nilm/sentinel/tests/model.spec.ts packages/nilm/sentinel/tests/suppression.spec.ts` |
 | **G3-3** | Outbox SKIP LOCKED 并发防重 | `store.spec.ts` 4 + `dispatcher.spec.ts` 8 = 12 | 内存模型通过；真实 MySQL 多进程待验 | `pnpm exec vitest run packages/nilm/notify/tests/store.spec.ts packages/nilm/notify/tests/dispatcher.spec.ts` |
 | **G3-4** | 四渠道格式化与指数退避 | `channels.spec.ts` 10 + `retry.spec.ts` 3 = 13 | 离线通过 | `pnpm exec vitest run packages/nilm/notify/tests/channels.spec.ts packages/nilm/notify/tests/retry.spec.ts` |

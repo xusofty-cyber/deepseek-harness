@@ -20,4 +20,9 @@ describe('init-nilm-system.sql', () => {
     expect(ddl).toContain('uk_tenant_plan_period')
     expect(ddl).toContain('uk_source_tenant')
   })
+
+  it('stores the sentinel watermark time with millisecond precision', () => {
+    const watermark = /CREATE TABLE `nilm_sentinel_watermark` \(([\s\S]*?)\n\)/.exec(ddl)?.[1]
+    expect(watermark).toMatch(/`record_time` DATETIME\(3\) NOT NULL/)
+  })
 })

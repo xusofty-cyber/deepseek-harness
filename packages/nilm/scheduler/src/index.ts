@@ -423,7 +423,13 @@ export class NilmSchedulerService extends Service {
       return { outcome: outcome('completed'), ...result }
     } catch (error) {
       const code = errorCode(error)
-      await this.repository.failJob(claim.jobRunId, code, nowMs)
+      try {
+        await this.repository.failJob(claim.jobRunId, code, nowMs)
+      } catch (failError) {
+        // The lease expires on its own; one tenant's bookkeeping failure must not
+        // abort the sweep for the tenants after it.
+        this.ctx.logger.warn(redactText(`nilm-scheduler ${jobType} failJob failed for ${tenant.tenantId}: ${errorText(failError)}`))
+      }
       this.ctx.logger.warn(redactText(`nilm-scheduler ${jobType} failed for ${tenant.tenantId}: ${errorText(error)}`))
       return { outcome: outcome('failed', code), reportInserted: false, notifications: 0, qualityFindings: 0 }
     }

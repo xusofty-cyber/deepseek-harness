@@ -1,4 +1,5 @@
 import { Context } from '@deepseek-ai/cordis'
+import { NilmError } from '@deepseek-ai/dsh-nilm-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import NilmSentinelService, {
   resolveConfig,
@@ -310,6 +311,99 @@ describe('incremental safety scan', () => {
     expect(await restarted.service.scanOnce()).toEqual({ read: 5, inserted: 1 })
     expect(store.events).toHaveLength(1)
     expect(store.watermarks.get('upstream_unsafe')).toMatchObject({ recordId: 'valid', scanOffset: 0 })
+  })
+
+  it('keeps the handled prefix and dead-letters a row that fails processing on every attempt', async () => {
+    const store = new MemorySentinelStore()
+    const resolveScopes = store.resolveScopes.bind(store)
+    store.resolveScopes = async (nodeIds, tenantId) => {
+      if (nodeIds.includes('channel-boom')) throw new NilmError('INVALID_ARGUMENT', 'poison payload')
+      return resolveScopes(nodeIds, tenantId)
+    }
+    const fixture = setup({ rules: [ruleRow()], store })
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    fixture.unsafe.rows.push(
+      row({ recordId: 'good-1', recordTime: new Date(T0 + 1_000) }),
+      row({ recordId: 'boom', recordTime: new Date(T0 + 2_000), terminalChannelId: 'channel-boom' }),
+      row({ recordId: 'good-2', recordTime: new Date(T0 + 3_000), unsafeType: 'leakage' }),
+    )
+
+    await expect(fixture.service.scanOnce()).rejects.toThrow('poison payload')
+    expect(store.watermarks.get('upstream_unsafe')?.recordId).toBe('good-1')
+    await expect(fixture.service.scanOnce()).rejects.toThrow('poison payload')
+    expect(store.watermarks.get('upstream_unsafe')?.recordId).toBe('good-1')
+
+    const third = await fixture.service.scanOnce()
+    expect(third.read).toBe(2)
+    expect(store.watermarks.get('upstream_unsafe')).toMatchObject({ recordId: 'good-2', scanOffset: 0 })
+    expect(store.events.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('retries a row whose processing fails transiently instead of skipping it', async () => {
+    const store = new MemorySentinelStore()
+    const resolveScopes = store.resolveScopes.bind(store)
+    let failures = 1
+    store.resolveScopes = async (nodeIds, tenantId) => {
+      if (failures > 0) {
+        failures -= 1
+        throw new Error('connection reset')
+      }
+      return resolveScopes(nodeIds, tenantId)
+    }
+    const fixture = setup({ rules: [ruleRow()], store })
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    fixture.unsafe.rows.push(row({ recordId: 'r1', recordTime: new Date(T0 + 1_000) }))
+
+    await expect(fixture.service.scanOnce()).rejects.toThrow('connection reset')
+    expect(store.watermarks.get('upstream_unsafe')?.recordId).toBe('r0')
+    expect(await fixture.service.scanOnce()).toEqual({ read: 1, inserted: 1 })
+    expect(store.events).toHaveLength(1)
+    expect(store.watermarks.get('upstream_unsafe')?.recordId).toBe('r1')
+  })
+
+  it('never dead-letters a row while the local store stays unavailable for many polls', async () => {
+    const store = new MemorySentinelStore()
+    const resolveScopes = store.resolveScopes.bind(store)
+    let outage = false
+    store.resolveScopes = async (nodeIds, tenantId) => {
+      if (outage) throw new Error('connect ECONNREFUSED')
+      return resolveScopes(nodeIds, tenantId)
+    }
+    const fixture = setup({ rules: [ruleRow()], store })
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    outage = true
+    fixture.unsafe.rows.push(row({ recordId: 'r1', recordTime: new Date(T0 + 1_000) }))
+
+    for (let poll = 0; poll < 6; poll += 1) {
+      await expect(fixture.service.scanOnce()).rejects.toThrow('ECONNREFUSED')
+      expect(store.watermarks.get('upstream_unsafe')?.recordId).toBe('r0')
+    }
+    outage = false
+    expect(await fixture.service.scanOnce()).toEqual({ read: 1, inserted: 1 })
+    expect(store.watermarks.get('upstream_unsafe')?.recordId).toBe('r1')
+  })
+
+  it('rethrows the processing error when saving the handled prefix also fails', async () => {
+    const store = new MemorySentinelStore()
+    const resolveScopes = store.resolveScopes.bind(store)
+    store.resolveScopes = async (nodeIds, tenantId) => {
+      if (nodeIds.includes('channel-boom')) throw new Error('poison payload')
+      return resolveScopes(nodeIds, tenantId)
+    }
+    const fixture = setup({ rules: [ruleRow()], store })
+    fixture.unsafe.rows.push(row({ recordId: 'r0' }))
+    await fixture.service.scanOnce()
+    store.saveWatermark = async () => { throw new Error('save failed') }
+    fixture.unsafe.rows.push(
+      row({ recordId: 'good-1', recordTime: new Date(T0 + 1_000) }),
+      row({ recordId: 'boom', recordTime: new Date(T0 + 2_000), terminalChannelId: 'channel-boom' }),
+    )
+
+    await expect(fixture.service.scanOnce()).rejects.toThrow('poison payload')
+    expect(store.watermarks.get('upstream_unsafe')?.recordId).toBe('r0')
   })
 
   it('does not scan upstream on a non-zero shard', async () => {

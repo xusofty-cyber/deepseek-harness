@@ -1,6 +1,6 @@
 # Session: 2026-11-23
 
-**Last Updated:** 2026-11-23 18:14 CST
+**Last Updated:** 2026-11-24 14:33 CST
 **Project:** `/home/picohood/projects/opensource/deepseek-harness`
 **Branch:** `feat/nilm-ai-agent-architecture`
 **Base:** `origin/master` at merge-base `39163dd30f703a79079e2d2446545cff3c453738`
@@ -8,7 +8,7 @@
 
 ## Current State
 
-阶段 0-4 的开发已在分支上完成。第三次独立复审（1 Critical、1 Important、2 Minor）已全部修复；第四次独立复审 `REJECT`（2 Critical、1 Important、3 Minor）的修复已落在工作区：`TABLE`/`VALUES` 查询表达式、生产 SQL 字面量、危险函数/变量、`VALUES()` 弃用、`record_id` 字节序与 `scan_offset` 上限。16:33 CST 重建临时测试配置后，完整 NILM 套件（49 文件、467 用例，含 `recovery.spec.ts`）、tsc 与文档门禁全部通过，测试规格计数已按 Vitest JSON 统一。第五次独立只读复审 `APPROVE`（0 Critical、1 Important、5 Minor）；其中 Important I-1 已在 16:45 CST 修复，完整套件 49 文件、469 用例通过（1 跳过）。第六次独立复审 `REJECT`（0 Critical、2 Important、5 Minor），两条 Important 与 Minor 3/6/7 已在 17:53 CST 修复，完整套件 49 文件、485 用例通过（1 跳过），待第七次复审。以下改动仍在工作区，**未提交、未推送**。
+阶段 0-4 的开发已在分支上完成。第三次独立复审（1 Critical、1 Important、2 Minor）已全部修复；第四次独立复审 `REJECT`（2 Critical、1 Important、3 Minor）的修复已落在工作区：`TABLE`/`VALUES` 查询表达式、生产 SQL 字面量、危险函数/变量、`VALUES()` 弃用、`record_id` 字节序与 `scan_offset` 上限。16:33 CST 重建临时测试配置后，完整 NILM 套件（49 文件、467 用例，含 `recovery.spec.ts`）、tsc 与文档门禁全部通过，测试规格计数已按 Vitest JSON 统一。第五次独立只读复审 `APPROVE`（0 Critical、1 Important、5 Minor）；其中 Important I-1 已在 16:45 CST 修复，完整套件 49 文件、469 用例通过（1 跳过）。第六次独立复审 `REJECT`（0 Critical、2 Important、5 Minor），两条 Important 与 Minor 3/6/7 已在 17:53 CST 修复，完整套件 49 文件、485 用例通过（1 跳过），待第七次复审。上述改动已提交为 `b3ed5205f6`（68 文件，未推送）。第七次独立复审 `REJECT`：C-1 `sql-guard.ts` 允许 `FROM ((SELECT ...) s, secret_table)` 括号表引用列表绕过白名单；m-3 `nilm_sentinel_watermark.record_time` 为 `DATETIME`，毫秒写入会进位越过同秒记录。2026-11-24 08:58 CST 已在工作区修复（括号深度 >1 一律拒绝；`record_time` 改 `DATETIME(3)`），各补 1 条回归；Vitest 49 文件、487 用例，486 通过、0 失败、1 跳过；tsc `^packages/nilm` 错误 0；测试规格计数已同步（总数 487、阶段 0 为 129、G0-1 106、G0-2 74）。第八次独立复审 `REJECT`（1 Critical、2 Important、2 Minor）：C-1 以 `INTERSECT`/`EXCEPT`/`WINDOW` 作别名后接逗号绕过逗号连接检测；I-1 `processUnsafeRow` 稳定抛错卡住 Sentinel 水位；I-2（原 m-5）`failJob` 抛错中断后续租户。2026-11-24 10:08 CST 已在工作区修复：三词仅在运算符形态结束 FROM（+6 用例）；单行处理失败先保存已处理前缀水位，同一 record 连续失败 3 次后死信跳过（+2 用例）；`failJob` 单独 try/catch（+1 用例）。Vitest 49 文件、496 用例，495 通过、0 失败、1 跳过；tsc `^packages/nilm` 错误 0；测试规格计数已同步（总数 496、阶段 0 135、阶段 3 84、阶段 4 128、G0-1 112、G0-2 80、G3-1 34）。第九次独立复审 `REJECT`（1 Critical、0 Important、6 Minor）：C-1 派生表别名 `intersect`/`except` 后接列清单 `(c)` 时被误判为集合运算符，`FROM (SELECT ...) intersect (c), secret` 绕过逗号连接检测；Minor 5 `scanOnce` catch 内 `saveWatermark` 抛错会覆盖原始处理错误。2026-11-24 11:21 CST 已在工作区修复：`INTERSECT`/`EXCEPT` 后的 `(` 仅当紧跟 `SELECT`/`WITH`/`(` 时视为运算符，前一词为 `AS` 时三词一律视为别名（+4 拒绝用例、+2 合法放行断言）；前缀水位保存单独 try/catch，记 warn 后仍抛原始错误（+1 用例）。Vitest 49 文件、501 用例，500 通过、0 失败、1 跳过；tsc `^packages/nilm` 错误 0；测试规格计数已同步（总数 501、阶段 0 139、阶段 3 85、G0-1 116、G0-2 84、G3-1 35、sql-guard 57、scanner 22）；`git diff --check` 通过。第十次复审（当前会话自审，非独立；子代理连续截断未能启动）`REJECT`（0 Critical、1 Important、3 Minor）：I-1 死信不区分错误类型，本地库连续约 15 秒不可用即丢安全告警；Minor 守卫放行若干依赖 MySQL 语法报错的畸形语句（`FROM t intersect (secret)`、`WINDOW w AS (...), secret`、`procedure, secret` 等）、`unsafeRowFailures` 满额整体清空、失败计数重启丢失。2026-11-24 13:47 CST 已在工作区修复：仅 `NilmError(INVALID_ARGUMENT)`/`TypeError`/`RangeError`/`SyntaxError` 计入死信，其余错误保留前缀水位后重抛、永不跳行（+1 用例）；`unsafeRowFailures` 改为淘汰最旧项；计数仅存内存已在代码注释写明；非派生表后接列清单拒绝、`WINDOW` 逗号后须为窗口定义、`PROCEDURE` 列入禁用子句（+4 拒绝用例、+1 合法放行）。Vitest 49 文件、507 用例，506 通过、0 失败、1 跳过；tsc `^packages/nilm` 错误 0；测试规格计数已同步（总数 507、阶段 0 144、阶段 3 86、G0-1 121、G0-2 89、G3-1 36、sql-guard 62、scanner 23）。修复**未提交、未推送**，待第十一次独立复审（须在仓库外启动，避免 `AGENTS.md` 注入截断任务）。
 
 ## Independent Re-review（2026-11-23 14:58 CST）
 
@@ -148,9 +148,20 @@ node --experimental-transform-types scripts/verify-translation-pairing.ts packag
 - **Minor M3**：`scan_offset` 写入前未限 INT UNSIGNED 上限。
 - 复审员 tsc 输出被截断，另见 `vendor/cosmokit`、`vendor/schemastery` 错误；本地 grep `^packages/nilm` 为 0。
 
+## 第十次独立复审（2026-11-24 14:20–14:33 CST，主会话直接执行）
+
+- 子代理两次因 `AGENTS.md` 注入截断而未执行，改为主会话只读复审；报告 `/tmp/nilm-review10/REVIEW.md`，探针 `/tmp/nilm-review10-agent/probe.spec.ts`（48 条）。
+- 结论 `APPROVE`（0 Critical / 0 Important / 3 Minor）。第九次 C-1（`intersect (c), secret`）与 Minor 5（前缀水位保存失败覆盖原始错误）均已核实修复。
+- 审阅时发现基线漂移：13:47–13:49 另有修改落地（507 用例），本次以当前工作区为准。
+- **Minor-1（已修复）**：`sql-guard.ts` `endsFromClause` 对 `INTERSECT/EXCEPT (` 只看首词，`(SELECT …) intersect ((c)), secret` 与 `intersect (select), secret` 被放行。现跳过全部开括号，要求 `SELECT/WITH` 后紧跟的不是 `)`/`,`；FROM 中多层括号列清单直接拒绝（`malformed set operator operand`）。新增 2 条拒绝用例。
+- **Minor-2（已修复）**：`SELECT STRAIGHT_JOIN a FROM t` 误把修饰符当表源。现 `STRAIGHT_JOIN` 前一词为 `SELECT/ALL/DISTINCT/DISTINCTROW/HIGH_PRIORITY`（均为保留字，不能作未加引号的别名）时跳过；新增 1 个用例（含修饰符 + 真 STRAIGHT_JOIN 白名单拒绝）。
+- **Minor-3（已修复，14:39 CST）**：`sql-guard.ts` 新增 `collectCteScopes`，CTE 名仅在其作用域（自身体之后到所在括号层/语句结束：后续 CTE 体、主查询及其子查询）解析为 CTE；每个 CTE 体照常查白名单；自身体或更早体内、大小写不同、库名限定（`other_db.s`）的同名引用仍按表查白名单；`WITH` 只在语句开头或 `(` 后视为 CTE（`WITH ROLLUP` 不受影响）；`WITH RECURSIVE` 与非裸 SELECT 的 CTE 体拒绝。新增 1 个放行用例（6 条断言）与 8 条拒绝用例。
+- 实测（14:33 CST）：Vitest 49 文件 510 用例，509 通过、0 失败、1 跳过；`packages/nilm` tsc 0 错误；改动仍限于原 10 个文件。修改前备份 `/tmp/nilm-fix-minor1-backup/`。
+- 实测（15:49 CST，Minor-3 修复后）：Vitest 49 文件 519 用例，518 通过、0 失败、1 跳过；`packages/nilm` tsc 0 错误（123 行均为 `vendor/*` 既有错误）；测试规格计数已同步（合计 519、日常 517、阶段 0 156、sql-guard 74、G0-1 133、G0-2 101）；`git diff --check` 通过；改动仍限于原 10 个文件，临时配置已移回 `/tmp/nilm-tmp-harness/`。文档修改前备份 `/tmp/nilm-fix-minor3-backup/`。
+
 ## Next Step
 
-1. 第七次独立复审仍待进行（第六次复审 `REJECT` 的 I-1、I-2 与 Minor 3/6/7 已于 17:53 CST 修复）。18:14 CST 在当前工作区复跑：Vitest 49 文件、485 用例，484 通过、0 失败、1 跳过；tsc `^packages/nilm` 错误 0；`git diff --check` 通过。
+1. 第十一次独立复审待进行（须在仓库外目录启动子代理或新任务，避免 `AGENTS.md` 注入截断任务；任务书模板 `/tmp/nilm-review9-brief.md` 需按当前基线 519 更新）：复核第十次 I-1（死信按错误类型分类）与 Minor（列清单、WINDOW 逗号、PROCEDURE、Map 淘汰最旧）修复、第十次 Minor-1/2/3（`intersect ((c))`、`SELECT STRAIGHT_JOIN` 修饰符、CTE 作用域）修复，并补做第九次 C-1、Minor 5 的独立复核。第九次 M1/M2/M4 已于 13:47 CST 修复。仍为已知风险：M3 死信只写日志不落库；M6 多 ownership 部分写入后重试可能因 history 触发升级换 `dedupeKey` 多发一条通知（推断，整批重放时已存在）。第八次 Minor 未处理：m-1 `cordis.patch.yml:121,175` shardIndex 解析（空串得 0、非数字后缀得 NaN、`replicas == NILM_SHARD_COUNT` 运行时不校验）；m-2 store 测试替身不模拟 DATETIME 精度，需在文档写明上游 `record_time` 精度假设；已部署环境需另行 `ALTER` `record_time` 为 `DATETIME(3)`。
 2. 第六次复审未处理的已知风险：`production-sql.spec.ts` 不识别别名/解构调用且 `' AND 1 = 0'` 分支未校验；`notify/src/store.ts:282-286` 仍用已弃用的 `VALUES()`。第五次复审 Minor M-1、M-2、M-3、M-5 仍未处理（M-4 已于 18:05 CST 处理）。
 3. 临时文件 `.vitest.nilm.tmp.config.mjs`、`.tsconfig.nilm.tmp.json` 不在仓库内，副本在 `/tmp/nilm-tmp-harness/`；再跑测试需临时拷回，跑完再删除。
 4. 仍待补：`recovery.spec.ts` 原生 flock 环境、覆盖率门禁（缺 `@vitest/coverage-v8`）、Open Field Gates 现场证据。

@@ -251,7 +251,7 @@ CREATE TABLE `nilm_notification_record` (
 
 CREATE TABLE `nilm_sentinel_watermark` (
   `source_name` VARCHAR(64) NOT NULL COMMENT '增量事件源名称，如 upstream_unsafe',
-  `record_time` DATETIME NOT NULL COMMENT '已处理记录的事件时间',
+  `record_time` DATETIME(3) NOT NULL COMMENT '已处理记录的事件时间；毫秒精度，避免写入时进位越过同秒记录',
   `record_id` VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '同一事件时间内的稳定排序ID；二进制排序，水位单调比较按字节序',
   `scan_offset` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '水位线之后已检查的无效时间行数（毒记录前缀），重启续扫用',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

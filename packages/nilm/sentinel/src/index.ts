@@ -210,6 +210,22 @@ interface ProcessContext {
 const UNSAFE_SOURCE = 'upstream_unsafe'
 /** Bound diagnostic de-duplication so a poisoned upstream cannot grow memory. */
 const MAX_DIAGNOSTIC_KEYS = 1_024
+/**
+ * Polls a row may fail deterministically in `processUnsafeRow` before it is
+ * dead-lettered and skipped. Transient failures never count toward this bound.
+ */
+const MAX_UNSAFE_ROW_ATTEMPTS = 3
+/**
+ * Classify a row-processing failure that replaying the same row cannot fix:
+ * an argument/data error or a JavaScript shape error raised by the payload.
+ * Everything else (store, driver, network, timeout) is treated as transient.
+ * @param error - thrown value.
+ * @returns true when the row itself is the cause.
+ */
+export function isDeterministicRowError(error: unknown): boolean {
+  if (error instanceof NilmError) return error.code === 'INVALID_ARGUMENT'
+  return error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError
+}
 /** Maximum batches per scan before yielding to the next poll tick. */
 const MAX_SCAN_BATCHES = 10
 /** Active inspection service. */
@@ -230,6 +246,7 @@ export class NilmSentinelService extends Service {
   private readonly missingSignalsLogged = new Set<string>()
   private readonly badUnsafeRecords = new Set<string>()
   private readonly ambiguousUnsafeRecords = new Set<string>()
+  private readonly unsafeRowFailures = new Map<string, number>()
   private unmappedSourceLogged = false
   private timer: NodeJS.Timeout | undefined
   private scanning = false
@@ -313,8 +330,33 @@ export class NilmSentinelService extends Service {
           this.noteBadUnsafeRecord(row.recordId)
           continue
         }
+        try {
+          inserted += await this.processUnsafeRow(row, context, nowMs, mappedTenantId)
+        } catch (error) {
+          if (!isDeterministicRowError(error)) {
+            // A store, network, or timeout failure says nothing about this row:
+            // keep the handled prefix and retry the row on every later poll,
+            // never dead-letter it, so a local outage cannot drop safety alerts.
+            await this.keepHandledPrefix(lastValid)
+            throw error
+          }
+          // Failure counts live in memory only; a restart grants a poison row a
+          // fresh set of attempts, which only delays its dead-lettering.
+          const attempts = (this.unsafeRowFailures.get(row.recordId) ?? 0) + 1
+          if (attempts < MAX_UNSAFE_ROW_ATTEMPTS) {
+            if (!this.unsafeRowFailures.has(row.recordId) && this.unsafeRowFailures.size >= MAX_DIAGNOSTIC_KEYS) {
+              // Evict the oldest entry instead of resetting every other row's count.
+              const oldest = this.unsafeRowFailures.keys().next().value
+              if (oldest !== undefined) this.unsafeRowFailures.delete(oldest)
+            }
+            this.unsafeRowFailures.set(row.recordId, attempts)
+            await this.keepHandledPrefix(lastValid)
+            throw error
+          }
+          this.noteFailedUnsafeRecord(row.recordId, attempts, error)
+        }
+        this.unsafeRowFailures.delete(row.recordId)
         lastValid = { recordId: row.recordId, recordTimeMs }
-        inserted += await this.processUnsafeRow(row, context, nowMs, mappedTenantId)
       }
       if (lastValid === undefined) {
         // The watermark only advances across rows with a usable instant. Offset
@@ -468,6 +510,36 @@ export class NilmSentinelService extends Service {
       this.badUnsafeRecords.add(key)
       this.ctx.logger.warn(redactText(`nilm-sentinel skipped upstream record ${recordId} with an invalid record_time`))
     }
+  }
+
+  /**
+   * Persist the rows already handled in the current batch before a failing row
+   * is rethrown, so the next poll retries that row instead of the whole batch.
+   * A failed save is logged, not thrown, so the processing error stays visible;
+   * the in-memory watermark still resumes after the handled prefix.
+   * @param lastValid - last handled row of the batch, if any.
+   */
+  private async keepHandledPrefix(lastValid: { recordId: string; recordTimeMs: number } | undefined): Promise<void> {
+    if (lastValid === undefined) return
+    this.watermark = lastValid
+    this.scanOffset = 0
+    try {
+      await this.store.saveWatermark(UNSAFE_SOURCE, { ...lastValid, scanOffset: 0 })
+    } catch (saveError) {
+      this.ctx.logger.warn(redactText(`nilm-sentinel failed to save the handled prefix watermark: ${errorText(saveError)}`))
+    }
+  }
+
+  /**
+   * Dead-letter a row whose processing failed on every allowed attempt.
+   * @param recordId - upstream record identity.
+   * @param attempts - consecutive failed polls.
+   * @param error - last processing error.
+   */
+  private noteFailedUnsafeRecord(recordId: string, attempts: number, error: unknown): void {
+    this.ctx.logger.warn(redactText(
+      `nilm-sentinel dead-lettered upstream record ${recordId} after ${String(attempts)} failed attempts: ${errorText(error)}`,
+    ))
   }
 
   private noteAmbiguousUnsafeRecord(recordId: string): void {

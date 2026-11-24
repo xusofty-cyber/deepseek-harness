@@ -265,4 +265,33 @@ describe('scheduler jobs', () => {
       ])
     expect(repo.reports.filter(row => row.tenantId === 'tenant-b')).toHaveLength(1)
   })
+
+  it('continues other tenants when recording a failed job throws', async () => {
+    class FailingFailJobRepository extends MemorySchedulerRepository {
+      override async failJob(): Promise<void> {
+        throw new Error('database connection lost')
+      }
+    }
+    const repository = new FailingFailJobRepository()
+    const second = tenant({ tenantId: 'tenant-b', tenantName: '工厂B' })
+    const { service, repo, data } = setup({
+      now: MORNING,
+      tenants: [tenant(), second],
+      repository,
+    })
+    seedMorning(data)
+    data.morning.set('tenant-b', data.morning.get('tenant-a')!)
+    data.errors.set('tenant-a', new NilmError('DATA_UNAVAILABLE', 'temporary gap'))
+
+    const result = await service.runDue(MORNING)
+
+    expect(result.outcomes.filter(outcome => outcome.tenantId === 'tenant-a'))
+      .toContainEqual(expect.objectContaining({ status: 'failed', errorCode: 'DATA_UNAVAILABLE' }))
+    expect(result.outcomes.filter(outcome => outcome.tenantId === 'tenant-b'))
+      .toEqual([
+        expect.objectContaining({ status: 'completed' }),
+        expect.objectContaining({ status: 'completed' }),
+      ])
+    expect(repo.reports.filter(row => row.tenantId === 'tenant-b')).toHaveLength(1)
+  })
 })
