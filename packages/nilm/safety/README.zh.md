@@ -10,7 +10,7 @@
 
 ## 扩展点
 
-`ctx.nilmSafety.queryUnsafeRecords(callContext, input)` 接收左闭右开的 `TimeRangeSpec`、可选终端/通道过滤、可选严重级别与正整数行数上限。终端与通道过滤在 SQL 中执行；严重级别在确定性投影后过滤。已知过载、不平衡、电压与冲击类型映射为 `warning` 或 `critical`；未确认的上游类型保持 `unknown` 并如实反馈。
+`ctx.nilmSafety.queryUnsafeRecords(callContext, input)` 接收左闭右开的 `TimeRangeSpec`、可选终端/通道过滤、可选严重级别与正整数行数上限。终端与通道过滤在 SQL 中执行；严重级别在确定性投影后过滤，因此发生在 SQL 行数上限之后；带严重级别过滤且命中上限时，warning 会说明这一点。严重级别来自 `@deepseek-ai/dsh-nilm-core` 的共享 `classifyUnsafeHazard`，与 Sentinel 使用同一分类器：冲击与过载类型（R-01a、R-03）为 `critical`，不平衡与电压类型（R-04、R-05）为 `warning`；未确认的上游类型保持 `unknown` 并如实反馈。结果按严重级别（`critical`、`warning`、`info`、`unknown`）排序，同级按时间倒序。
 
 ## 已知限制与延期工作
 

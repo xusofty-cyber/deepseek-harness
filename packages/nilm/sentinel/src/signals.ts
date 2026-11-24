@@ -184,7 +184,7 @@ export class SourceRuleSignalProvider implements RuleSignalProvider {
     const meters = await this.ctx().get('nilmAssets')!.resolveMeterSet(callContext(tenantId), {
       level: rule.scope.level,
       id: rule.scope.id,
-    })
+    }, undefined, atMs)
     this.meterCache.set(key, { expiresAtMs: atMs + this.cacheTtlMs, meters })
     return meters
   }

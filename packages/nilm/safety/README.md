@@ -10,7 +10,7 @@ None. `SourceSafetyRepository` reads through `ctx.nilmSource` with parameterized
 
 ## Extension points
 
-`ctx.nilmSafety.queryUnsafeRecords(callContext, input)` accepts a half-open `TimeRangeSpec`, optional terminal/channel filters, optional severity, and a positive limit. Terminal and channel filters are applied in SQL; severity filtering happens after deterministic projection. Known overload, unbalance, voltage, and transient type names map to `warning` or `critical`; every unconfirmed upstream type stays `unknown` and is reported as such.
+`ctx.nilmSafety.queryUnsafeRecords(callContext, input)` accepts a half-open `TimeRangeSpec`, optional terminal/channel filters, optional severity, and a positive limit. Terminal and channel filters are applied in SQL; severity filtering happens after deterministic projection and therefore after the SQL row limit, and a limit-hit warning says so when a severity filter is present. Severity comes from the shared `classifyUnsafeHazard` in `@deepseek-ai/dsh-nilm-core`, the same classifier Sentinel uses: transient and overload types (R-01a, R-03) are `critical`, unbalance and voltage types (R-04, R-05) are `warning`, and every unconfirmed upstream type stays `unknown` and is reported as such. Records are sorted by severity (`critical`, `warning`, `info`, `unknown`), then newest first.
 
 ## Known Limitations and Deferred Work
 

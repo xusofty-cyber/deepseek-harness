@@ -182,6 +182,38 @@ describe('scheduled-report data collection', () => {
     expect(result.warnings).toContain('hot/cold consistency is not checked until a cold energy route is configured for R-08')
   })
 
+  it('sums only leaf branches so nested branch levels are not double counted', async () => {
+    const queried: string[] = []
+    const source = new SourceSchedulerDataSource(dependencies({
+      source: {
+        queryLocalReadOnly: async <T>(): Promise<T[]> => [
+          { terminalId: 'terminal-1', channelId: 'total', role: 'terminal_total', parentChannelId: null },
+          { terminalId: 'terminal-1', channelId: 'branch-1', role: 'branch', parentChannelId: 'total' },
+          { terminalId: 'terminal-1', channelId: 'sub-1', role: 'branch', parentChannelId: 'branch-1' },
+          { terminalId: 'terminal-1', channelId: 'sub-2', role: 'branch', parentChannelId: 'branch-1' },
+          { terminalId: 'terminal-1', channelId: 'branch-2', role: 'branch', parentChannelId: 'total' },
+        ] as T[],
+      },
+      timeseries: {
+        queryAggregatedEnergy: async (_caller, meters) => {
+          const channel = String(meters[0]?.channelId)
+          queried.push(channel)
+          const energy: Record<string, number> = { 'total': 100, 'branch-1': 60, 'sub-1': 35, 'sub-2': 25, 'branch-2': 40 }
+          return {
+            buckets: buckets(energy[channel] ?? 0),
+            dataQuality: { coverage: 1, provisional: false, gaps: [], source: 'raw', warnings: [] },
+            warnings: [],
+          }
+        },
+      },
+    }))
+    const result = await source.collectQuality('tenant-a', DAY_START, DAY_END)
+    expect(result.observations).toEqual([expect.objectContaining({
+      scopeId: 'terminal-1', parentEnergyKwh: 100, childEnergyKwh: 100,
+    })])
+    expect(queried).not.toContain('branch-1')
+  })
+
   it('keeps a recoverable terminal query gap and rethrows fatal quality failures', async () => {
     const source = new SourceSchedulerDataSource(dependencies({
       source: {

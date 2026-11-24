@@ -153,10 +153,18 @@ export interface SchedulerRepository {
     retryDelayMs: number
     newJobRunId: () => string
   }): Promise<JobClaim>
-  /** @param jobRunId - claimed run. @param finishedAtMs - completion instant. */
-  completeJob(jobRunId: string, finishedAtMs: number): Promise<void>
-  /** @param jobRunId - claimed run. @param errorCode - stable failure code. @param finishedAtMs - failure instant. */
-  failJob(jobRunId: string, errorCode: string, finishedAtMs: number): Promise<void>
+  /**
+   * Mark the claimed attempt completed; a stale attempt whose lease was reclaimed changes nothing.
+   * @param jobRunId - claimed run. @param attempt - attempt fence from the claim. @param finishedAtMs - completion instant.
+   * @returns whether this attempt still held the claim.
+   */
+  completeJob(jobRunId: string, attempt: number, finishedAtMs: number): Promise<boolean>
+  /**
+   * Mark the claimed attempt failed; a stale attempt whose lease was reclaimed changes nothing.
+   * @param jobRunId - claimed run. @param attempt - attempt fence from the claim. @param errorCode - stable failure code. @param finishedAtMs - failure instant.
+   * @returns whether this attempt still held the claim.
+   */
+  failJob(jobRunId: string, attempt: number, errorCode: string, finishedAtMs: number): Promise<boolean>
   /** @param report - deterministic report row. @returns the stored report id and whether it was inserted. */
   saveReport(report: ReportDraft): Promise<SavedReport>
   /** @param draft - report delivery row. */

@@ -5,6 +5,7 @@
  * @module @deepseek-ai/dsh-nilm-sentinel/unsafe
  */
 
+import { classifyUnsafeHazard, type UnsafeHazardFamily } from '@deepseek-ai/dsh-nilm-core'
 import type { AlertSeverity, SentinelRuleId } from './model.ts'
 import type { RuleFinding } from './rules.ts'
 
@@ -44,32 +45,22 @@ export interface UnsafeClassification {
   bypassSilence: boolean
 }
 
-const SAFETY_CRITICAL_TYPES = ['transient', 'step', 'shock', 'arc', 'flashover'] as const
-const OVERLOAD_TYPES = ['overload', 'over_current', 'overcurrent', 'current_over', 'power_over'] as const
-const UNBALANCE_TYPES = ['unbalance', 'imbalance', 'three_phase', 'phase_loss'] as const
-const VOLTAGE_TYPES = ['voltage', 'over_voltage', 'under_voltage', 'voltage_deviation'] as const
+const FAMILY_RULES: Readonly<Record<UnsafeHazardFamily, Omit<UnsafeClassification, 'severity'>>> = {
+  transient: { ruleId: 'R-01a', metric: 'unsafe_transient_event', bypassSilence: true },
+  overload: { ruleId: 'R-03', metric: 'unsafe_overload_power_kw', bypassSilence: true },
+  unbalance: { ruleId: 'R-04', metric: 'unsafe_three_phase_event', bypassSilence: false },
+  voltage: { ruleId: 'R-05', metric: 'unsafe_voltage_event', bypassSilence: false },
+}
 
 /**
- * Classify one upstream hazard type.
+ * Classify one upstream hazard type through the shared core classifier.
  * @param unsafeType - upstream type name.
  * @returns the classification, or `undefined` for an unconfirmed type.
  */
 export function classifyUnsafeType(unsafeType: string): UnsafeClassification | undefined {
-  const normalized = normalize(unsafeType)
-  if (normalized.length === 0) return undefined
-  if (matches(normalized, SAFETY_CRITICAL_TYPES)) {
-    return { ruleId: 'R-01a', severity: 'critical', metric: 'unsafe_transient_event', bypassSilence: true }
-  }
-  if (matches(normalized, OVERLOAD_TYPES)) {
-    return { ruleId: 'R-03', severity: 'critical', metric: 'unsafe_overload_power_kw', bypassSilence: true }
-  }
-  if (matches(normalized, UNBALANCE_TYPES)) {
-    return { ruleId: 'R-04', severity: 'warning', metric: 'unsafe_three_phase_event', bypassSilence: false }
-  }
-  if (matches(normalized, VOLTAGE_TYPES)) {
-    return { ruleId: 'R-05', severity: 'warning', metric: 'unsafe_voltage_event', bypassSilence: false }
-  }
-  return undefined
+  const hazard = classifyUnsafeHazard(unsafeType)
+  if (hazard === undefined) return undefined
+  return { ...FAMILY_RULES[hazard.family], severity: hazard.severity }
 }
 
 /**
@@ -131,25 +122,6 @@ export function toMs(value: string | Date, recordId: string): number {
   const ms = value instanceof Date ? value.getTime() : Date.parse(value)
   if (!Number.isFinite(ms)) throw new Error(`unsafe record ${recordId} has an invalid record_time`)
   return ms
-}
-
-/**
- * Normalize an upstream type for matching.
- * @param value - upstream type text.
- * @returns lowercase text with separators collapsed.
- */
-function normalize(value: string): string {
-  return value.trim().toLowerCase().replaceAll(/[\s-]+/g, '_')
-}
-
-/**
- * Test whether a normalized type contains one of the confirmed fragments.
- * @param normalized - normalized upstream type.
- * @param fragments - confirmed fragments for the family.
- * @returns true when any fragment occurs.
- */
-function matches(normalized: string, fragments: readonly string[]): boolean {
-  return fragments.some(fragment => normalized.includes(fragment))
 }
 
 /**

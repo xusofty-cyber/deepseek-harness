@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-与数据库和模型无关的 NILM 标识符、范围结构、数据质量元数据、带版本的 `ChartSpec` 协议、`AlertCard` 与稳定错误码。本包不持有运行时状态，也不执行 IO。
+与数据库和模型无关的 NILM 标识符、范围结构、数据质量元数据、带版本的 `ChartSpec` 协议、`AlertCard`、稳定错误码，以及 Sentinel 与安全查询共用的上游隐患类型分类器 `classifyUnsafeHazard`（冲击/过载为 `critical`，不平衡/电压为 `warning`，其余返回 `undefined`）。本包不持有运行时状态，也不执行 IO。
 
 ## 配置
 

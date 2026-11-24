@@ -75,7 +75,7 @@ describe('NilmSafetyService', () => {
       channelId: 'channel-1',
       phase: null,
       unsafeType: 'overload_single_power',
-      severity: 'warning',
+      severity: 'critical',
       description: '额定功率超限',
       powerKw: 12.5,
       currentA: null,
@@ -135,12 +135,44 @@ describe('NilmSafetyService', () => {
 
   it('filters severity after row projection', async () => {
     const service = setup({
-      list: async () => [row() as never, row({ recordId: 'r2', unsafeType: 'transient' }) as never],
+      list: async () => [row({ unsafeType: 'over_voltage' }) as never, row({ recordId: 'r2', unsafeType: 'transient' }) as never],
     })
     const result = await service.queryUnsafeRecords(callContext(), {
       range: range(), terminalIds: ['terminal-1'], severity: 'critical',
     })
     expect(result.records.map(record => record.recordId)).toEqual(['r2'])
+  })
+
+  it('classifies like Sentinel and sorts by severity, then newest first', async () => {
+    const service = setup({
+      list: async () => [
+        row({ recordId: 'v-old', unsafeType: 'over_voltage', recordTime: new Date(base) }) as never,
+        row({ recordId: 'x-new', unsafeType: 'vendor_specific_code', recordTime: new Date(base + 50 * 60_000) }) as never,
+        row({ recordId: 'o-old', unsafeType: 'overload_single_power', recordTime: new Date(base + 60_000) }) as never,
+        row({ recordId: 'v-new', unsafeType: 'three_phase_unbalance', recordTime: new Date(base + 40 * 60_000) }) as never,
+        row({ recordId: 't-new', unsafeType: 'transient', recordTime: new Date(base + 30 * 60_000) }) as never,
+      ],
+    })
+    const result = await service.queryUnsafeRecords(callContext(), { range: range(), terminalIds: ['terminal-1'] })
+    expect(result.records.map(record => [record.recordId, record.severity])).toEqual([
+      ['t-new', 'critical'],
+      ['o-old', 'critical'],
+      ['v-new', 'warning'],
+      ['v-old', 'warning'],
+      ['x-new', 'unknown'],
+    ])
+    expect(Object.keys(result.records[0]!)).not.toContain('occurredMs')
+  })
+
+  it('warns that a severity filter ran after the row limit', async () => {
+    const service = setup({
+      list: async () => [row({ recordId: 'a', unsafeType: 'over_voltage' }) as never, row({ recordId: 'b' }) as never],
+    })
+    const result = await service.queryUnsafeRecords(callContext(), {
+      range: range(), terminalIds: ['terminal-1'], severity: 'critical', limit: 2,
+    })
+    expect(result.records.map(record => record.recordId)).toEqual(['b'])
+    expect(result.warnings).toContain('result reached the 2-row limit before the severity filter; narrow the range for completeness')
   })
 
   it('throws a typed error for unparseable upstream times', async () => {

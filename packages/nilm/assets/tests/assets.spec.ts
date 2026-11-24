@@ -119,6 +119,32 @@ describe('NilmAssetsService', () => {
     expect(result.warnings).toContain('no effective measurement bindings; channel_type projection was used')
   })
 
+  it('resolves measurement bindings effective at the requested instant', async () => {
+    const swapMs = Date.parse('2026-06-01T00:00:00+08:00')
+    const seen: number[] = []
+    const service = setup({
+      listAssets: async () => assets,
+      listBindings: async (_tenantId, atMs) => {
+        seen.push(atMs)
+        return atMs < swapMs
+          ? [
+              { terminalId: 't1', channelId: 'c1', role: 'reference' },
+              { terminalId: 't1', channelId: 'c1b1', role: 'terminal_total' },
+            ]
+          : [{ terminalId: 't1', channelId: 'c1', role: 'terminal_total' }]
+      },
+    })
+    const historical = await service.resolveMeterSet(callContext(), { level: 'terminal', id: 't1' }, undefined, swapMs - 1)
+    const current = await service.resolveMeterSet(callContext(), { level: 'terminal', id: 't1' }, undefined, swapMs)
+    const before = Date.now()
+    await service.resolveMeterSet(callContext(), { level: 'terminal', id: 't1' })
+    expect(seen.slice(0, 2)).toEqual([swapMs - 1, swapMs])
+    expect(seen[2]).toBeGreaterThanOrEqual(before)
+    expect(historical.map(meter => meter.channelId)).toContain('c1b1')
+    expect(current.map(meter => meter.channelId)).not.toContain('c1b1')
+    expect(historical).not.toEqual(current)
+  })
+
   it('selects only leaf branches when a terminal has no total inlet', async () => {
     const noTotal = assets.map(asset => asset.nodeId === 'c1' ? { ...asset, channelType: 'sub' as const } : asset)
     const service = setup({

@@ -6,6 +6,7 @@
 
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
+  classifyUnsafeHazard,
   NilmError,
   type CallContext,
   type NilmDataQuality,
@@ -64,7 +65,11 @@ export interface SafetyQueryInput {
   terminalIds?: readonly string[]
   /** Optional channel restrictions; an empty list selects no channel. */
   channelIds?: readonly string[]
-  /** Optional severity restriction. */
+  /**
+   * Optional severity restriction. Applied after the SQL row limit (severity is
+   * derived from the shared classifier, not stored upstream), so it narrows the
+   * limited rows; a limit-hit warning says so.
+   */
   severity?: SafetySeverity
   /** Requested row limit; clamped to the service maximum. */
   limit?: number
@@ -216,11 +221,15 @@ export class NilmSafetyService extends Service {
       channelIds,
     }, signal)
     const warnings: string[] = []
-    if (rows.length === limit) warnings.push(`result reached the ${String(limit)}-row limit; narrow the range for completeness`)
+    if (rows.length === limit) {
+      warnings.push(input.severity === undefined
+        ? `result reached the ${String(limit)}-row limit; narrow the range for completeness`
+        : `result reached the ${String(limit)}-row limit before the severity filter; narrow the range for completeness`)
+    }
     const records = rows.flatMap(row => {
       const project = projectRow(row, input, terminalIds, channelIds)
       return project === undefined ? [] : [project]
-    })
+    }).sort(compareRecords).map(({ occurredMs: _occurredMs, ...record }) => record)
     if (records.length === 0) warnings.push('no matching unsafe records')
     const dataQuality: NilmDataQuality = {
       coverage: 1,
@@ -233,7 +242,7 @@ export class NilmSafetyService extends Service {
   }
 }
 
-function projectRow(row: UnsafeRow, input: SafetyQueryInput, terminalIds: readonly string[], channelIds: readonly string[]): SafetyRecord | undefined {
+function projectRow(row: UnsafeRow, input: SafetyQueryInput, terminalIds: readonly string[], channelIds: readonly string[]): (SafetyRecord & { occurredMs: number }) | undefined {
   const terminal = row.terminalChannelId
   const channel = row.assetId
   const allowed = terminalIds.includes(terminal ?? '')
@@ -246,6 +255,7 @@ function projectRow(row: UnsafeRow, input: SafetyQueryInput, terminalIds: readon
   const occurred = row.recordTime instanceof Date ? row.recordTime.getTime() : Date.parse(row.recordTime)
   if (!Number.isFinite(occurred)) throw new NilmError('DATA_UNAVAILABLE', `unsafe record ${row.recordId} has an invalid time`)
   return {
+    occurredMs: occurred,
     recordId: row.recordId,
     occurredAt: businessIso(occurred),
     sitePath: null,
@@ -275,11 +285,15 @@ function safeFilters(ids: readonly string[] | undefined, label: string): string[
 }
 
 function severityOf(type: string): SafetySeverity {
-  const normalized = type.trim().toLowerCase()
-  if (['overload_single_power', 'three_phase_unbalance', 'voltage_deviation', 'over_voltage', 'under_voltage'].includes(normalized)) return 'warning'
-  if (['transient', 'electric_shock', 'arc_fault'].includes(normalized)) return 'critical'
-  if (normalized.length === 0) return 'unknown'
-  return 'unknown'
+  return classifyUnsafeHazard(type)?.severity ?? 'unknown'
+}
+
+const SEVERITY_RANK: Readonly<Record<SafetySeverity, number>> = { critical: 0, warning: 1, info: 2, unknown: 3 }
+
+function compareRecords(left: SafetyRecord & { occurredMs: number }, right: SafetyRecord & { occurredMs: number }): number {
+  return SEVERITY_RANK[left.severity] - SEVERITY_RANK[right.severity]
+    || right.occurredMs - left.occurredMs
+    || left.recordId.localeCompare(right.recordId)
 }
 
 function nullableNumber(value: string | number | null): number | null {

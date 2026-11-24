@@ -78,22 +78,26 @@ export class MemorySchedulerRepository implements SchedulerRepository {
     return { status: 'claimed', jobRunId: existing.jobRunId, attempt: existing.attempt }
   }
 
-  async completeJob(jobRunId: string, finishedAtMs: number): Promise<void> {
+  async completeJob(jobRunId: string, attempt: number, finishedAtMs: number): Promise<boolean> {
     for (const row of this.jobs.values()) {
-      if (row.jobRunId === jobRunId && row.status === 'running') {
+      if (row.jobRunId === jobRunId && row.attempt === attempt && row.status === 'running') {
         row.status = 'completed'
         row.finishedAtMs = finishedAtMs
+        return true
       }
     }
+    return false
   }
 
-  async failJob(jobRunId: string, _errorCode: string, finishedAtMs: number): Promise<void> {
+  async failJob(jobRunId: string, attempt: number, _errorCode: string, finishedAtMs: number): Promise<boolean> {
     for (const row of this.jobs.values()) {
-      if (row.jobRunId === jobRunId && row.status === 'running') {
+      if (row.jobRunId === jobRunId && row.attempt === attempt && row.status === 'running') {
         row.status = 'failed'
         row.finishedAtMs = finishedAtMs
+        return true
       }
     }
+    return false
   }
 
   async saveReport(report: ReportDraft): Promise<SavedReport> {

@@ -202,6 +202,60 @@ describe('NilmTimeseriesService', () => {
     expect(result.warnings[0]).toContain('cold warehouse')
   })
 
+  it('splits a range crossing the hot window into cold and hot segments', async () => {
+    const now = base + 92 * DAY
+    const cutoff = now - 90 * DAY
+    const coldWindows: Array<[number, number]> = []
+    const statsSql: string[] = []
+    const source = fakeSource({
+      queryCold: async (_template, params) => {
+        coldWindows.push([Number(params.startMs), Number(params.endMs)])
+        return { rows: [{ startMs: base, endMs: base + DAY, energyKwh: 8 }] }
+      },
+      queryStats: async sql => { statsSql.push(sql); return [{ ts: cutoff, statistic_result: 5 }] },
+    })
+    const service = setup(source, now)
+    const result = await service.queryAggregatedEnergy(
+      callContext(),
+      [meter({ pathName: 'A/总进线' })],
+      range(base, base + 3 * DAY, 'day'),
+      'day',
+    )
+    expect(coldWindows).toEqual([[base, cutoff]])
+    expect(statsSql).toHaveLength(1)
+    expect(statsSql[0]).toContain(`ts >= ${String(cutoff)} AND ts < ${String(base + 3 * DAY)}`)
+    expect(result.dataQuality.source).toBe('mixed')
+    expect(result.buckets.map(bucket => bucket.energyKwh).reduce((sum, value) => sum + value, 0)).toBe(13)
+    expect(result.buckets.some(bucket => bucket.energyKwh === 5)).toBe(true)
+    expect(result.warnings.some(warning => warning.includes('cold warehouse'))).toBe(true)
+  })
+
+  it('returns the hot segment with a gap when the cold link is unavailable', async () => {
+    const now = base + 92 * DAY
+    const cutoff = now - 90 * DAY
+    const source = fakeSource({
+      queryCold: async () => { throw new NilmError('COLD_LINK_UNAVAILABLE', 'cold proxy down') },
+      queryStats: async () => [{ ts: cutoff, statistic_result: 5 }],
+    })
+    const service = setup(source, now)
+    const result = await service.queryAggregatedEnergy(
+      callContext(),
+      [meter({ pathName: 'A/总进线' })],
+      range(base, base + 3 * DAY, 'day'),
+      'day',
+    )
+    expect(result.dataQuality.source).toBe('mixed')
+    expect(result.buckets.map(bucket => bucket.energyKwh)).toEqual([5])
+    expect(result.dataQuality.gaps[0]?.reason).toBe('cold_unavailable')
+    expect(result.warnings.some(warning => warning.includes('cold warehouse unavailable'))).toBe(true)
+    await expect(service.queryAggregatedEnergy(
+      callContext(),
+      [meter({ pathName: 'A/总进线' })],
+      range(base, base + DAY, 'day'),
+      'day',
+    )).rejects.toMatchObject({ code: 'COLD_LINK_UNAVAILABLE' })
+  })
+
   it('escapes a projected path instead of rejecting non-ASCII names', async () => {
     let captured = ''
     const source = fakeSource({

@@ -13,7 +13,7 @@
   - [阶段 3：主动巡检引擎与可靠通知投递](nilm-ai-agent-detailed-design-phase3.md)
   - [阶段 4：报告调度、租户分片、压测与安全验收](nilm-ai-agent-detailed-design-phase4.md)
 
-本文档是当前可执行测试的清单与证据门映射，不替代开发计划中的现场验收。计数来自 2026-11-24 的 Vitest JSON：**49 个测试文件、519 个断言**；日常套件 48 个文件、517 个断言全部通过；`recovery.spec.ts` 的 2 个断言中 1 个通过、1 个因缺少原生 flock 跳过。
+本文档是当前可执行测试的清单与证据门映射，不替代开发计划中的现场验收。计数来自 2026-11-24 的 Vitest JSON：**49 个测试文件、528 个断言**；日常套件 48 个文件、526 个断言全部通过；`recovery.spec.ts` 的 2 个断言中 1 个通过、1 个因缺少原生 flock 跳过。
 
 阅读约定：用例标题直接复制当前 `it()` 标题；文件级“覆盖”是摘要，逐条断言语义以标题和测试代码为准；“现场待验”表示离线用例不能替代的环境证据。
 
@@ -22,11 +22,11 @@
 | 阶段 | 文件数 | 断言数 | 说明 |
 | :--- | ---: | ---: | :--- |
 | 阶段 0 | 14 | 156 | 核心类型、有界 HTTP 读取、上下文、数据源、存储驱动、Bundle/守卫 |
-| 阶段 1 | 9 | 116 | 资产、时序、安全记录、提示词、Tool、BFF、电价/分析 |
+| 阶段 1 | 9 | 122 | 资产、时序、安全记录、提示词、Tool、BFF、电价/分析 |
 | 阶段 2 | 2 | 33 | 电能质量与 CUSUM |
 | 阶段 3 | 10 | 86 | Sentinel 与 Notify |
-| 阶段 4 | 14 | 128 | 调度、分片、恢复、压测与安全审计 |
-| **合计** | **49** | **519** | 日常 517 + recovery 2（1 skip） |
+| 阶段 4 | 14 | 131 | 调度、分片、恢复、压测与安全审计 |
+| **合计** | **49** | **528** | 日常 526 + recovery 2（1 skip） |
 
 ## 2. 阶段 0：基础设施、数据源与生产沙箱
 
@@ -197,7 +197,7 @@
 
 ### 3.1 工业资产拓扑
 
-**`packages/nilm/assets/tests/assets.spec.ts`** — 10 个断言（10 通过）。覆盖：车间/终端/通道解析；总表与分路不重叠；重名歧义、越权范围、缺少 terminal 祖先与重复总表均拒绝；设备映射到父通道并标记估算；channel_type 回退。
+**`packages/nilm/assets/tests/assets.spec.ts`** — 11 个断言（11 通过）。覆盖：车间/终端/通道解析；总表与分路不重叠；重名歧义、越权范围、缺少 terminal 祖先与重复总表均拒绝；设备映射到父通道并标记估算；channel_type 回退；绑定按请求时刻生效。
 
 - `resolves a named workshop and selects non-overlapping total meters`
 - `reports duplicate names as ambiguous instead of picking one`
@@ -209,10 +209,11 @@
 - `returns workshop channels and validates missing or ambiguous identifiers`
 - `rejects a missing allowed scope instead of widening access`
 - `rejects duplicate total inlets for one terminal`
+- `resolves measurement bindings effective at the requested instant`
 
 ### 3.2 时序多源路由与降采样
 
-**`packages/nilm/timeseries/tests/timeseries.spec.ts`** — 14 个断言（14 通过）。覆盖：热/统计/冷路由；覆盖率与缺口；电表翻转不产生负电量；2,000 原始点上限；LTTB 降采样；表名白名单；中文路径；设备状态；空结果与非法范围；采样上限写入结构化 `dataQuality.truncated`，完整结果不置位。
+**`packages/nilm/timeseries/tests/timeseries.spec.ts`** — 16 个断言（16 通过）。覆盖：热/统计/冷路由；覆盖率与缺口；电表翻转不产生负电量；2,000 原始点上限；LTTB 降采样；表名白名单；中文路径；设备状态；空结果与非法范围；采样上限写入结构化 `dataQuality.truncated`，完整结果不置位；跨热窗口范围拆分冷/热两段合并（`source: mixed`），冷链路不可用时只返回热段并标注 `cold_unavailable` 缺口。
 
 - `prefers summarized realtime rows and reports coverage gaps`
 - `rejects unsupported metrics and malformed ranges`
@@ -228,10 +229,12 @@
 - `returns no appliance rows without querying when the meter set is empty`
 - `queries raw analysis columns with an explicit limit and sorts samples across meters`
 - `returns an empty raw analysis result with zero coverage when no rows match`
+- `splits a range crossing the hot window into cold and hot segments`
+- `returns the hot segment with a gap when the cold link is unavailable`
 
 ### 3.3 安全记录与系统提示词
 
-**`packages/nilm/safety/tests/safety.spec.ts`** — 6 个断言（6 通过）。覆盖：上游字段投影并保留 null；租户过滤；限幅与空结果；非法范围；severity 过滤；不可解析时间抛类型化错误。
+**`packages/nilm/safety/tests/safety.spec.ts`** — 8 个断言（8 通过）。覆盖：上游字段投影并保留 null；租户过滤；限幅与空结果；非法范围；severity 过滤；不可解析时间抛类型化错误；与 Sentinel 共用分类器（overload 为 critical），按严重度再按时间倒序排序；severity 过滤在行数上限之后执行并给出告警。
 
 - `projects upstream fields and preserves missing values as null`
 - `passes tenant filters to SQL and keeps unknown severity explicit`
@@ -239,6 +242,8 @@
 - `rejects malformed ranges and unsafe filters before the repository runs`
 - `filters severity after row projection`
 - `throws a typed error for unparseable upstream times`
+- `classifies like Sentinel and sorts by severity, then newest first`
+- `warns that a severity filter ran after the row limit`
 
 **`packages/nilm/prompt/tests/prompt.spec.ts`** — 1 个断言（1 通过）。覆盖：注册一个稳定策略段。
 
@@ -246,7 +251,7 @@
 
 ### 3.4 业务 Tool 闭集
 
-**`packages/nilm/tools/tests/tools.spec.ts`** — 13 个断言（13 通过）。覆盖：6 个闭集工具；事实截断；缺失数据不补零；结构化截断标志驱动部分电量摘要；图表与澄清候选放入 presentation；PQ 加权与谐波图不下送模型；秒级窗口不超过 4 小时；设备/残差；安全 SQL 限定授权终端与通道。
+**`packages/nilm/tools/tests/tools.spec.ts`** — 14 个断言（14 通过）。覆盖：6 个闭集工具；事实截断；缺失数据不补零；结构化截断标志驱动部分电量摘要；图表与澄清候选放入 presentation；PQ 加权与谐波图不下送模型；秒级窗口不超过 4 小时；设备/残差；安全 SQL 限定授权终端与通道；绑定按查询范围最后时刻生效。
 
 - `registers six closed-schema tools`
 - `caps scope facts and reports truncation`
@@ -260,6 +265,8 @@
 - `summarizes appliances and residual against terminal energy`
 - `restricts safety SQL to the resolved terminals and channels`
 - `caps safety facts and reports the truncation`
+- `resolves bindings effective at the last instant of the query range`
+- `labels a capped energy result as partial from the structured quality flag`
 
 ### 3.5 BFF 认证、会话与 SSE
 
@@ -526,18 +533,19 @@
 - `recognizes due times and monthly forecast days`
 - `rejects impossible calendar dates`
 
-**`packages/nilm/scheduler/tests/store.spec.ts`** — 8 个断言（8 通过）。覆盖：租户/告警严重度、PF 阈值、任务 claim 状态、无持久行拒绝、完成/失败错误码、报告身份、Outbox 审计截断、最新报告解码。
+**`packages/nilm/scheduler/tests/store.spec.ts`** — 9 个断言（9 通过）。覆盖：租户/告警严重度、PF 阈值、任务 claim 状态、无持久行拒绝、完成/失败错误码、报告身份、Outbox 审计截断、最新报告解码；完成/失败带 attempt 栅栏，租约被回收的过期 attempt 被报告。
 
 - `lists tenants and maps alert severities`
 - `rejects absent or out-of-range power-factor thresholds`
 - `claims a new job and reports completed, in-progress, and retry states`
 - `rejects a claim that inserted no durable job row`
-- `completes and fails running jobs with bounded error codes`
+- `completes and fails running jobs with bounded error codes and an attempt fence`
 - `returns inserted and duplicate report identities`
 - `enqueues outbox rows and truncates operational audit text`
 - `reads the latest report and decodes stored JSON`
+- `reports a stale attempt whose lease was reclaimed`
 
-**`packages/nilm/scheduler/tests/scheduler.spec.ts`** — 13 个断言（13 通过）。覆盖：配置加载校验；幂等晨报与逐接收人 Outbox；R-08/R-07 合并扫描；时间窗/预测日；失败不臆造策略；模型失败/空白/超时回退确定性摘要；无接收人成功；失败延迟重试；单租户 claim 抛错或 `failJob` 抛错均不中断后续租户。
+**`packages/nilm/scheduler/tests/scheduler.spec.ts`** — 14 个断言（14 通过）。覆盖：配置加载校验；幂等晨报与逐接收人 Outbox；R-08/R-07 合并扫描；时间窗/预测日；失败不臆造策略；模型失败/空白/超时回退确定性摘要；无接收人成功；失败延迟重试；单租户 claim 抛错或 `failJob` 抛错均不中断后续租户；过期 attempt 不覆盖已被重新 claim 的任务。
 
 - `rejects unknown report channels and templates at configuration load`
 - `generates and delivers an idempotent morning report`
@@ -550,6 +558,9 @@
 - `keeps the deterministic summary for blank or timed-out model text`
 - `reports success without delivery when no recipient is configured`
 - `retries a failed job only after the configured delay`
+- `continues other tenants when one tenant claim throws`
+- `does not let a stale attempt overwrite a reclaimed job`
+- `continues other tenants when recording a failed job throws`
 
 **`packages/nilm/scheduler/tests/report.spec.ts`** — 3 个断言（3 通过）。覆盖：确定性晨报载荷/图表/份额；无电价计划时份额为 null；强制月度预测报告。
 
@@ -557,13 +568,14 @@
 - `keeps period shares null when no tariff plan is available`
 - `builds a mandatory monthly forecast report`
 
-**`packages/nilm/scheduler/tests/data-source.spec.ts`** — 5 个断言（5 通过）。覆盖：工厂/车间能耗与电费；租户缺口告警但致命错误上抛；月度预聚合；终端父子能耗校验；可恢复终端缺口上抛。
+**`packages/nilm/scheduler/tests/data-source.spec.ts`** — 6 个断言（6 通过）。覆盖：工厂/车间能耗与电费；租户缺口告警但致命错误上抛；月度预聚合；终端父子能耗校验；可恢复终端缺口上抛；只汇总叶子分路，嵌套分路不双算。
 
 - `collects factory energy, tariff costs, and workshop energy`
 - `keeps recoverable tenant gaps as warnings but rethrows fatal failures`
 - `collects configured monthly energy and reports an empty preaggregation`
 - `checks parent and child energy per terminal and skips incomplete bindings`
 - `keeps a recoverable terminal query gap and rethrows fatal quality failures`
+- `sums only leaf branches so nested branch levels are not double counted`
 
 **`packages/nilm/scheduler/tests/morning-report.spec.ts`** — 1 个断言（1 通过）。覆盖：20 租户在延迟预算内重算且幂等。
 
@@ -722,7 +734,7 @@
 | **G0-3** | 生产 Profile 无危险工具，移除 3 个扩展包 | `bundle.spec.ts` 5 + `guard.spec.ts` 2 | 离线通过 | `pnpm exec vitest run packages/bundle/nilm-app/tests` |
 | **G0-4** | 假模型进程启动、最小 SDK 调用、SIGTERM 干净退出 | 无自动化用例；`bundle.spec.ts` 不启动进程 | **现场待验** | 按 `pnpm dsh --profile nilm` 执行并留存日志（见开发计划 G0-4） |
 | **G1-1** | 电量/电费/工况纯函数覆盖 | `analytics.spec.ts` 21 + `tariff.spec.ts` 16 = 37 | 离线通过 | `pnpm exec vitest run packages/nilm/analytics/tests/analytics.spec.ts packages/nilm/tariff/tests/tariff.spec.ts` |
-| **G1-2** | 真实资产树展开无双算/漏算 | `assets.spec.ts` 10 | 离线通过 | `pnpm exec vitest run packages/nilm/assets/tests` |
+| **G1-2** | 真实资产树展开无双算/漏算 | `assets.spec.ts` 11 | 离线通过 | `pnpm exec vitest run packages/nilm/assets/tests` |
 | **G1-3** | 双租户越权与签名篡改 100% 拦截 | `auth.spec.ts` 9 + `http.spec.ts` 26（含跨租户） | BFF 离线通过；真实数据库零跨租户 SQL 待验 | `pnpm exec vitest run packages/nilm/service/tests/auth.spec.ts packages/nilm/service/tests/http.spec.ts` |
 | **G1-4** | 黄金问答集 Session 回放无事实/数值幻觉 | 快照目录未录制，0 断言 | **现场待验** | `pnpm test:snapshot -t nilm-golden-qa-p1`（先录制快照） |
 | **G2-1** | CUSUM 边沿检测召回率 ≥98% | `cusum.spec.ts` 18（合成工业白噪声） | 离线通过；真实基准波形集待验 | `pnpm exec vitest run packages/nilm/analytics/tests/cusum.spec.ts` |

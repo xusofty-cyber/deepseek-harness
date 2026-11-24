@@ -258,7 +258,7 @@ export function applyTools(ctx: NilmToolHost): void {
       if (applianceNum !== undefined && (!Number.isInteger(applianceNum) || applianceNum < 0)) {
         throw new ToolArgsError(['applianceCategory must be a non-negative decimal integer'])
       }
-      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal)
+      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal, bindingInstant(range))
       if (resolution.ambiguous) return ambiguityResult(target, resolution.matched)
       if (resolution.meterSet.length === 0) {
         return emptyApplianceResult(target, dateRange(range), resolution.warnings ?? [])
@@ -368,7 +368,7 @@ export function applyTools(ctx: NilmToolHost): void {
       const callContext = requireCallContext(ctx, exec.agent?.id)
       const range = timeRange(args.start, args.end, args.granularity)
       const target = scopeTarget(args.scope)
-      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal)
+      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal, bindingInstant(range))
       if (resolution.ambiguous) {
         return ambiguityResult(target, resolution.matched)
       }
@@ -456,7 +456,7 @@ export function applyTools(ctx: NilmToolHost): void {
         throw new ToolArgsError(['nominalVoltageV must be positive'])
       }
       const target = scopeTarget(args.scope)
-      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal)
+      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal, bindingInstant(range))
       if (resolution.ambiguous) return ambiguityResult(target, resolution.matched)
       if (resolution.meterSet.length === 0) {
         return emptyPowerQualityResult(target, dateRange(range), resolution.warnings ?? [])
@@ -569,7 +569,7 @@ export function applyTools(ctx: NilmToolHost): void {
       }
       const mode = args.analysisMode ?? 'comprehensive'
       const target = scopeTarget(args.scope)
-      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal)
+      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal, bindingInstant(range))
       if (resolution.ambiguous) return ambiguityResult(target, resolution.matched)
       if (resolution.meterSet.length === 0) {
         return emptyTimeSeriesResult(target, dateRange(range), mode, resolution.warnings ?? [])
@@ -671,7 +671,7 @@ export function applyTools(ctx: NilmToolHost): void {
       const callContext = requireCallContext(ctx, exec.agent?.id)
       const range = timeRange(args.start, args.end, 'minute')
       const target = scopeTarget(args.scope)
-      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal)
+      const resolution = await ctx.nilmAssets.resolveScope(callContext, target, exec.signal, bindingInstant(range))
       if (resolution.ambiguous) return ambiguityResult(target, resolution.matched)
       if (resolution.meterSet.length === 0) {
         return emptySafetyResult(target, dateRange(range), resolution.warnings ?? [])
@@ -1021,6 +1021,11 @@ function timeRange(start: string, end: string, granularity: TimeRangeSpec['granu
     throw new ToolArgsError(['start and end must be ordered ISO 8601 instants'])
   }
   return { start, end, timeZone: 'Asia/Shanghai', granularity }
+}
+
+/** Bindings effective at the last instant of the half-open query range. */
+function bindingInstant(range: TimeRangeSpec): number {
+  return Date.parse(range.end) - 1
 }
 
 function dateRange(range: TimeRangeSpec): { start: string; end: string } {

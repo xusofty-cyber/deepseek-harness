@@ -284,15 +284,61 @@ export class NilmTimeseriesService extends Service {
   ): Promise<EnergyQueryResult> {
     requireContext(callContext)
     const window = parseRange(range)
-    const ageMs = this.now() - window.startMs
-    if (ageMs > this.config.hotDays * DAY_MS) {
-      return this.coldEnergy(callContext, meterSet, window, granularity, signal)
-    }
+    const cutoff = this.now() - this.config.hotDays * DAY_MS
+    if (window.startMs >= cutoff) return this.hotEnergy(meterSet, window, granularity, signal)
+    if (window.endMs <= cutoff) return this.coldEnergy(callContext, meterSet, window, granularity, signal)
+    return this.mixedEnergy(callContext, meterSet, window, cutoff, granularity, signal)
+  }
+
+  private async hotEnergy(
+    meterSet: readonly MeterPoint[],
+    window: Window,
+    granularity: TimeRangeSpec['granularity'],
+    signal?: AbortSignal,
+  ): Promise<EnergyQueryResult> {
     if ((granularity === 'day' || granularity === 'month') && meterSet.some(meter => meter.pathName !== undefined)) {
       const stats = await this.statsEnergy(meterSet, window, granularity, signal)
       if (stats.buckets.length > 0) return stats
     }
     return this.rawEnergy(meterSet, window, granularity, signal)
+  }
+
+  private async mixedEnergy(
+    callContext: CallContext,
+    meterSet: readonly MeterPoint[],
+    window: Window,
+    cutoff: number,
+    granularity: TimeRangeSpec['granularity'],
+    signal?: AbortSignal,
+  ): Promise<EnergyQueryResult> {
+    const coldWindow = { startMs: window.startMs, endMs: cutoff }
+    const hotWindow = { startMs: cutoff, endMs: window.endMs }
+    let cold: EnergyQueryResult | undefined
+    try {
+      cold = await this.coldEnergy(callContext, meterSet, coldWindow, granularity, signal)
+    } catch (error) {
+      if (!(error instanceof NilmError) || error.code !== 'COLD_LINK_UNAVAILABLE') throw error
+    }
+    const hot = await this.hotEnergy(meterSet, hotWindow, granularity, signal)
+    const buckets: EnergyBucket[] = []
+    for (const bucket of [...(cold?.buckets ?? []), ...hot.buckets]) addToBucket(buckets, bucket.startMs, bucket.endMs, bucket.energyKwh)
+    sortBuckets(buckets)
+    const warnings = [...(cold?.warnings ?? []), ...hot.warnings]
+    if (cold === undefined) {
+      warnings.push(`cold warehouse unavailable; only data from ${businessIso(cutoff)} onward is included`)
+    }
+    const truncated = cold?.dataQuality.truncated === true || hot.dataQuality.truncated === true
+    const stepMs = bucketWidth(window.startMs, granularity)
+    const starts = buckets.map(bucket => bucket.startMs)
+    const dataQuality = quality(window, starts, stepMs, 'mixed', warnings, this.now(), truncated)
+    if (cold === undefined) {
+      const hotGaps = gapIntervals(hotWindow, [...new Set(starts)].sort((left, right) => left - right), stepMs)
+      dataQuality.gaps = [
+        { start: businessIso(window.startMs), end: businessIso(cutoff), reason: 'cold_unavailable' },
+        ...hotGaps.slice(0, 99).map(gap => ({ start: businessIso(gap.startMs), end: businessIso(gap.endMs), reason: 'missing_samples' })),
+      ]
+    }
+    return { buckets, dataQuality, warnings }
   }
 
   /**

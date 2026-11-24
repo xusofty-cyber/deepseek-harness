@@ -419,12 +419,18 @@ export class NilmSchedulerService extends Service {
     if (claim.status === 'in-progress') return { outcome: outcome('in-progress'), reportInserted: false, notifications: 0, qualityFindings: 0 }
     try {
       const result = await work()
-      await this.repository.completeJob(claim.jobRunId, nowMs)
+      const held = await this.repository.completeJob(claim.jobRunId, claim.attempt, nowMs)
+      if (!held) {
+        this.ctx.logger.warn(redactText(`nilm-scheduler ${jobType} attempt ${claim.attempt} for ${tenant.tenantId} lost its lease before completion`))
+      }
       return { outcome: outcome('completed'), ...result }
     } catch (error) {
       const code = errorCode(error)
       try {
-        await this.repository.failJob(claim.jobRunId, code, nowMs)
+        const held = await this.repository.failJob(claim.jobRunId, claim.attempt, code, nowMs)
+        if (!held) {
+          this.ctx.logger.warn(redactText(`nilm-scheduler ${jobType} attempt ${claim.attempt} for ${tenant.tenantId} lost its lease before failure was recorded`))
+        }
       } catch (failError) {
         // The lease expires on its own; one tenant's bookkeeping failure must not
         // abort the sweep for the tenants after it.

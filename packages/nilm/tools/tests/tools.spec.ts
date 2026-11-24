@@ -304,6 +304,28 @@ describe('nilm tools', () => {
     expect(meta.dataQuality).not.toBe(null)
   })
 
+  it('resolves bindings effective at the last instant of the query range', async () => {
+    const { host: h, registered } = host()
+    const seen: Array<number | undefined> = []
+    applyTools({
+      ...h,
+      nilmAssets: {
+        resolveScope: async (_context, _target, _signal, asOfMs) => {
+          seen.push(asOfMs)
+          return resolution()
+        },
+      },
+    })
+    await execute(registered.get('nilm_energy_query')!, {
+      scope: { level: 'channel', id: 'c1' },
+      start: new Date(START).toISOString(),
+      end: new Date(END).toISOString(),
+      granularity: 'hour',
+      include_cost: false,
+    })
+    expect(seen).toEqual([END - 1])
+  })
+
   it('labels a capped energy result as partial from the structured quality flag', async () => {
     const cappedQuality: NilmDataQuality = {
       ...quality,

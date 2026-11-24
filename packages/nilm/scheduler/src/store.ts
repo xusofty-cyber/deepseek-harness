@@ -119,27 +119,29 @@ export class MysqlSchedulerRepository implements SchedulerRepository {
     })
   }
 
-  /** @param jobRunId - claimed run. @param finishedAtMs - completion instant. */
-  async completeJob(jobRunId: string, finishedAtMs: number): Promise<void> {
-    await this.database().transaction(async tx => {
-      await tx.affected(
+  /** @param jobRunId - claimed run. @param attempt - attempt fence. @param finishedAtMs - completion instant. @returns whether the fence held. */
+  async completeJob(jobRunId: string, attempt: number, finishedAtMs: number): Promise<boolean> {
+    return this.database().transaction(async tx => {
+      const affected = await tx.affected(
         `UPDATE nilm_job_run
             SET status = 'completed', finished_at = ?, error_code = NULL
-          WHERE job_run_id = ? AND status = 'running'`,
-        [new Date(finishedAtMs), jobRunId],
+          WHERE job_run_id = ? AND attempt = ? AND status = 'running'`,
+        [new Date(finishedAtMs), jobRunId, attempt],
       )
+      return affected === 1
     })
   }
 
-  /** @param jobRunId - claimed run. @param errorCode - stable failure code. @param finishedAtMs - failure instant. */
-  async failJob(jobRunId: string, errorCode: string, finishedAtMs: number): Promise<void> {
-    await this.database().transaction(async tx => {
-      await tx.affected(
+  /** @param jobRunId - claimed run. @param attempt - attempt fence. @param errorCode - stable failure code. @param finishedAtMs - failure instant. @returns whether the fence held. */
+  async failJob(jobRunId: string, attempt: number, errorCode: string, finishedAtMs: number): Promise<boolean> {
+    return this.database().transaction(async tx => {
+      const affected = await tx.affected(
         `UPDATE nilm_job_run
             SET status = 'failed', finished_at = ?, error_code = ?
-          WHERE job_run_id = ? AND status = 'running'`,
-        [new Date(finishedAtMs), errorCode.slice(0, 64), jobRunId],
+          WHERE job_run_id = ? AND attempt = ? AND status = 'running'`,
+        [new Date(finishedAtMs), errorCode.slice(0, 64), jobRunId, attempt],
       )
+      return affected === 1
     })
   }
 

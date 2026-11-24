@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Database- and model-independent NILM identifiers, scope structures, data-quality metadata, the versioned `ChartSpec` protocol, `AlertCard`, and stable error codes. The package owns no runtime state and performs no IO.
+Database- and model-independent NILM identifiers, scope structures, data-quality metadata, the versioned `ChartSpec` protocol, `AlertCard`, stable error codes, and `classifyUnsafeHazard`, the single upstream unsafe-type classifier shared by Sentinel and the safety query (transient/overload `critical`, unbalance/voltage `warning`, otherwise `undefined`). The package owns no runtime state and performs no IO.
 
 ## Configuration
 

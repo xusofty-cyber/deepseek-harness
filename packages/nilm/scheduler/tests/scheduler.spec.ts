@@ -266,9 +266,28 @@ describe('scheduler jobs', () => {
     expect(repo.reports.filter(row => row.tenantId === 'tenant-b')).toHaveLength(1)
   })
 
+  it('does not let a stale attempt overwrite a reclaimed job', async () => {
+    class ReclaimingRepository extends MemorySchedulerRepository {
+      override async completeJob(jobRunId: string, attempt: number, finishedAtMs: number): Promise<boolean> {
+        for (const row of this.jobs.values()) {
+          if (row.jobRunId === jobRunId) row.attempt += 1
+        }
+        return super.completeJob(jobRunId, attempt, finishedAtMs)
+      }
+    }
+    const { service, repo, data } = setup({ now: MORNING, repository: new ReclaimingRepository() })
+    seedMorning(data)
+
+    await service.runDue(MORNING)
+
+    const rows = [...repo.jobs.values()]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row).toMatchObject({ status: 'running', attempt: 2 })
+  })
+
   it('continues other tenants when recording a failed job throws', async () => {
     class FailingFailJobRepository extends MemorySchedulerRepository {
-      override async failJob(): Promise<void> {
+      override async failJob(): Promise<boolean> {
         throw new Error('database connection lost')
       }
     }

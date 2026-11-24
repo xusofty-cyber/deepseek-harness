@@ -128,14 +128,25 @@ describe('MySQL scheduler repository', () => {
     })).rejects.toThrow('job claim inserted no row')
   })
 
-  it('completes and fails running jobs with bounded error codes', async () => {
+  it('completes and fails running jobs with bounded error codes and an attempt fence', async () => {
     const db = new FakeDatabase()
     const repo = repository(db)
     db.affectedCounts.push(1, 1)
-    await repo.completeJob('job_1', 10)
-    await repo.failJob('job_1', 'X'.repeat(80), 20)
+    await expect(repo.completeJob('job_1', 2, 10)).resolves.toBe(true)
+    await expect(repo.failJob('job_1', 2, 'X'.repeat(80), 20)).resolves.toBe(true)
 
-    expect(db.statements[1]!.params).toEqual([new Date(20), 'X'.repeat(64), 'job_1'])
+    expect(db.statements[0]!.sql).toContain('attempt = ?')
+    expect(db.statements[0]!.params).toEqual([new Date(10), 'job_1', 2])
+    expect(db.statements[1]!.sql).toContain('attempt = ?')
+    expect(db.statements[1]!.params).toEqual([new Date(20), 'X'.repeat(64), 'job_1', 2])
+  })
+
+  it('reports a stale attempt whose lease was reclaimed', async () => {
+    const db = new FakeDatabase()
+    const repo = repository(db)
+    db.affectedCounts.push(0, 0)
+    await expect(repo.completeJob('job_1', 1, 10)).resolves.toBe(false)
+    await expect(repo.failJob('job_1', 1, 'X', 20)).resolves.toBe(false)
   })
 
   it('returns inserted and duplicate report identities', async () => {

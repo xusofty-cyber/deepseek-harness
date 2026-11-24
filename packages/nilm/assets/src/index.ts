@@ -181,12 +181,14 @@ export class NilmAssetsService extends Service {
    * @param callContext - verified caller identity.
    * @param query - requested level, identifier, path, or name.
    * @param signal - optional caller cancellation.
+   * @param asOfMs - instant whose effective measurement bindings apply; defaults to now.
    * @returns matched nodes, ambiguity, warnings, and the non-overlapping meter set.
    */
   async resolveScope(
     callContext: CallContext,
     query: ScopeTarget,
     signal?: AbortSignal,
+    asOfMs?: number,
   ): Promise<ScopeResolution> {
     const assets = await this.repository.listAssets(callContext.tenantId, signal)
     const allMatches = rankMatches(assets, query)
@@ -212,7 +214,7 @@ export class NilmAssetsService extends Service {
     }
     const selected = matches[0]!
     resolution.resolvedPath = selected.pathName
-    const meters = await this.meterSetFor(callContext, assets, selected, signal)
+    const meters = await this.meterSetFor(callContext, assets, selected, asOfMs ?? Date.now(), signal)
     resolution.meterSet = meters.meterSet
     resolution.warnings = meters.warnings
     return resolution
@@ -223,17 +225,20 @@ export class NilmAssetsService extends Service {
    * @param callContext - verified caller identity.
    * @param workshopId - workshop identifier.
    * @param signal - optional caller cancellation.
+   * @param asOfMs - instant whose effective measurement bindings apply; defaults to now.
    * @returns non-overlapping meter points.
    */
   async getWorkshopChannels(
     callContext: CallContext,
     workshopId: string,
     signal?: AbortSignal,
+    asOfMs?: number,
   ): Promise<MeterPoint[]> {
     const resolution = await this.resolveScope(
       callContext,
       { level: 'workshop', id: workshopId },
       signal,
+      asOfMs,
     )
     if (resolution.ambiguous) {
       throw new NilmError('AMBIGUOUS_SCOPE', `workshop ${workshopId} is ambiguous`)
@@ -246,14 +251,16 @@ export class NilmAssetsService extends Service {
    * @param callContext - verified caller identity.
    * @param scope - requested scope.
    * @param signal - optional caller cancellation.
+   * @param asOfMs - instant whose effective measurement bindings apply; defaults to now.
    * @returns non-overlapping meter points.
    */
   async resolveMeterSet(
     callContext: CallContext,
     scope: ScopeTarget,
     signal?: AbortSignal,
+    asOfMs?: number,
   ): Promise<MeterPoint[]> {
-    const resolution = await this.resolveScope(callContext, scope, signal)
+    const resolution = await this.resolveScope(callContext, scope, signal, asOfMs)
     if (resolution.ambiguous) throw new NilmError('AMBIGUOUS_SCOPE', `scope ${describe(scope)} is ambiguous`)
     return resolution.meterSet
   }
@@ -262,6 +269,7 @@ export class NilmAssetsService extends Service {
     callContext: CallContext,
     assets: readonly AssetNode[],
     selected: AssetNode,
+    asOfMs: number,
     signal?: AbortSignal,
   ): Promise<{ meterSet: MeterPoint[]; warnings: string[] }> {
     if (selected.level === 'appliance') {
@@ -287,7 +295,7 @@ export class NilmAssetsService extends Service {
       return { meterSet: [], warnings: [`${selected.pathName} has no projected channels`] }
     }
 
-    const bindings = await this.repository.listBindings(callContext.tenantId, Date.now(), signal)
+    const bindings = await this.repository.listBindings(callContext.tenantId, asOfMs, signal)
     const byChannel = new Map(bindings.map(binding => [binding.channelId, binding]))
     const warnings: string[] = []
     const candidates: Array<{ channel: AssetNode; terminalId: string; role: MeterRole; parentChannelId?: string }> = []

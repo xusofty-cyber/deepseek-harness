@@ -149,7 +149,7 @@ export class SourceSchedulerDataSource implements SchedulerDataSource {
     let dataQuality: Pick<NilmDataQuality, 'coverage' | 'source'> = { coverage: 0, source: 'raw' }
     let meters: MeterPoint[] = []
     try {
-      meters = await this.dependencies.assets.resolveMeterSet(caller, { level: 'factory' })
+      meters = await this.dependencies.assets.resolveMeterSet(caller, { level: 'factory' }, undefined, Date.parse(range.end) - 1)
     } catch (error) {
       if (!isRecoverable(error)) throw error
       warnings.push(`factory meter set is unavailable: ${errorText(error)}`)
@@ -220,7 +220,9 @@ export class SourceSchedulerDataSource implements SchedulerDataSource {
     const warnings: string[] = []
     for (const [terminalId, meters] of byTerminal) {
       const total = meters.find(meter => meter.role === 'terminal_total')
-      const branches = meters.filter(meter => meter.role === 'branch')
+      const allBranches = meters.filter(meter => meter.role === 'branch')
+      const parents = new Set(allBranches.flatMap(meter => meter.parentChannelId === undefined ? [] : [meter.parentChannelId]))
+      const branches = allBranches.filter(meter => !parents.has(meter.channelId))
       if (total === undefined || branches.length === 0) continue
       try {
         const totalEnergy = await this.dependencies.timeseries.queryAggregatedEnergy(caller, [total], range, 'hour')
@@ -265,7 +267,7 @@ export class SourceSchedulerDataSource implements SchedulerDataSource {
     const workshops: WorkshopEnergy[] = []
     for (const workshop of rows) {
       try {
-        const meters = await this.dependencies.assets.getWorkshopChannels(caller, workshop.nodeId)
+        const meters = await this.dependencies.assets.getWorkshopChannels(caller, workshop.nodeId, undefined, Date.parse(range.end) - 1)
         if (meters.length === 0) continue
         const energy = await this.dependencies.timeseries.queryAggregatedEnergy(caller, meters, range, 'hour')
         workshops.push({ name: workshop.nodeName, energyKwh: sumBuckets(energy.buckets) })

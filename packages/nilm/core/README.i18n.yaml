@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/nilm/core/README.md
 /deepseek-ai-dsh-nilm-core:
-  en: b734aecdeeab92c5
-  zh: aad20200f85f605b
+  en: 29e184163cecdd09
+  zh: 4eab5971380c37eb
 /deepseek-ai-dsh-nilm-core/configuration:
   en: a9923d31b604bfa9
   zh: eb704559ac4071b5
